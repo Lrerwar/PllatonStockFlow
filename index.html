@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>StockFlow — Gestão de Estoque</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- LOGIN SCREEN -->
+  <div id="login-screen" class="screen active">
+    <div class="login-bg"></div>
+    <div class="login-box">
+      <div class="logo-mark">SF</div>
+      <h1 class="brand">StockFlow</h1>
+      <p class="brand-sub">Gestão de estoque & vendas</p>
+      <div class="input-group">
+        <label>E-mail</label>
+        <input type="email" id="login-email" placeholder="seu@email.com" />
+      </div>
+      <div class="input-group">
+        <label>Senha</label>
+        <input type="password" id="login-password" placeholder="••••••••" />
+      </div>
+      <p id="login-error" class="error-msg"></p>
+      <button class="btn-primary" onclick="login()">Entrar</button>
+      <button class="btn-ghost" onclick="showRegister()">Criar conta</button>
+    </div>
+  </div>
+
+  <!-- REGISTER SCREEN -->
+  <div id="register-screen" class="screen">
+    <div class="login-bg"></div>
+    <div class="login-box">
+      <div class="logo-mark">SF</div>
+      <h1 class="brand">Nova Conta</h1>
+      <p class="brand-sub">Crie sua conta StockFlow</p>
+      <div class="input-group">
+        <label>Nome da empresa / usuário</label>
+        <input type="text" id="reg-name" placeholder="Minha Loja" />
+      </div>
+      <div class="input-group">
+        <label>E-mail</label>
+        <input type="email" id="reg-email" placeholder="seu@email.com" />
+      </div>
+      <div class="input-group">
+        <label>Senha</label>
+        <input type="password" id="reg-password" placeholder="mínimo 6 caracteres" />
+      </div>
+      <p id="reg-error" class="error-msg"></p>
+      <button class="btn-primary" onclick="register()">Criar conta</button>
+      <button class="btn-ghost" onclick="showLogin()">← Voltar</button>
+    </div>
+  </div>
+
+  <!-- MAIN APP -->
+  <div id="app-screen" class="screen">
+
+    <!-- SIDEBAR -->
+    <nav class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <div class="logo-mark small">SF</div>
+        <span class="brand-nav">StockFlow</span>
+        <button class="sidebar-close" onclick="toggleSidebar()">✕</button>
+      </div>
+      <ul class="nav-links">
+        <li><a href="#" class="nav-item active" data-page="dashboard" onclick="navigate('dashboard',this)">
+          <span class="nav-icon">◈</span> Dashboard
+        </a></li>
+        <li><a href="#" class="nav-item" data-page="estoque" onclick="navigate('estoque',this)">
+          <span class="nav-icon">◫</span> Estoque
+        </a></li>
+        <li><a href="#" class="nav-item" data-page="vendas" onclick="navigate('vendas',this)">
+          <span class="nav-icon">◉</span> Vendas
+        </a></li>
+        <li><a href="#" class="nav-item" data-page="producao" onclick="navigate('producao',this)">
+          <span class="nav-icon">◌</span> Produção
+        </a></li>
+        <li><a href="#" class="nav-item" data-page="historico" onclick="navigate('historico',this)">
+          <span class="nav-icon">◷</span> Histórico
+        </a></li>
+      </ul>
+      <div class="sidebar-footer">
+        <span id="user-display" class="user-name"></span>
+        <button class="btn-logout" onclick="logout()">Sair</button>
+      </div>
+    </nav>
+
+    <!-- OVERLAY -->
+    <div class="overlay" id="overlay" onclick="toggleSidebar()"></div>
+
+    <!-- MAIN CONTENT -->
+    <main class="main-content">
+      <header class="top-bar">
+        <button class="menu-btn" onclick="toggleSidebar()">☰</button>
+        <h2 class="page-title" id="page-title">Dashboard</h2>
+        <div class="top-right">
+          <span class="sync-dot" id="sync-dot" title="Sincronizado"></span>
+        </div>
+      </header>
+
+      <!-- DASHBOARD PAGE -->
+      <div class="page active" id="page-dashboard">
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-label">Itens no Estoque</div>
+            <div class="stat-value" id="stat-estoque">—</div>
+          </div>
+          <div class="stat-card accent">
+            <div class="stat-label">Vendas Pendentes</div>
+            <div class="stat-value" id="stat-pendentes">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Produzidos Hoje</div>
+            <div class="stat-value" id="stat-hoje">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Total Histórico</div>
+            <div class="stat-value" id="stat-historico">—</div>
+          </div>
+        </div>
+
+        <div class="section-title">Vendas Pendentes de Produção</div>
+        <div id="dash-pendentes" class="card-list">
+          <div class="empty-state">Nenhuma venda pendente</div>
+        </div>
+
+        <div class="section-title">Estoque Baixo <span class="badge warn">Atenção</span></div>
+        <div id="dash-estoque-baixo" class="card-list">
+          <div class="empty-state">Estoque em dia</div>
+        </div>
+      </div>
+
+      <!-- ESTOQUE PAGE -->
+      <div class="page" id="page-estoque">
+        <div class="page-actions">
+          <button class="btn-primary" onclick="openModal('modal-produto')">+ Novo Produto</button>
+        </div>
+        <div class="search-bar">
+          <input type="text" id="search-estoque" placeholder="Buscar produto..." oninput="renderEstoque()" />
+        </div>
+        <div id="list-estoque" class="table-wrap">
+          <div class="empty-state">Nenhum produto cadastrado</div>
+        </div>
+      </div>
+
+      <!-- VENDAS PAGE -->
+      <div class="page" id="page-vendas">
+        <div class="page-actions">
+          <button class="btn-primary" onclick="openModal('modal-venda')">+ Nova Venda</button>
+        </div>
+        <div class="filter-tabs">
+          <button class="tab active" onclick="filterVendas('pendente',this)">Pendentes</button>
+          <button class="tab" onclick="filterVendas('produzido',this)">Produzidas</button>
+          <button class="tab" onclick="filterVendas('todos',this)">Todas</button>
+        </div>
+        <div id="list-vendas" class="card-list">
+          <div class="empty-state">Nenhuma venda cadastrada</div>
+        </div>
+      </div>
+
+      <!-- PRODUÇÃO PAGE -->
+      <div class="page" id="page-producao">
+        <div class="section-title">Itens para Produzir</div>
+        <p class="page-hint">Marque como produzido para mover ao histórico</p>
+        <div id="list-producao" class="card-list">
+          <div class="empty-state">Nada para produzir agora 🎉</div>
+        </div>
+      </div>
+
+      <!-- HISTÓRICO PAGE -->
+      <div class="page" id="page-historico">
+        <div class="filter-row">
+          <input type="date" id="hist-from" />
+          <span>até</span>
+          <input type="date" id="hist-to" />
+          <button class="btn-sm" onclick="renderHistorico()">Filtrar</button>
+          <button class="btn-sm ghost" onclick="clearHistFilter()">Limpar</button>
+        </div>
+        <div id="list-historico" class="card-list">
+          <div class="empty-state">Nenhum item no histórico</div>
+        </div>
+      </div>
+
+    </main>
+  </div>
+
+  <!-- MODAL: PRODUTO -->
+  <div class="modal-backdrop" id="modal-produto">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="modal-produto-title">Novo Produto</h3>
+        <button onclick="closeModal('modal-produto')">✕</button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="prod-id" />
+        <div class="input-group">
+          <label>Nome do produto *</label>
+          <input type="text" id="prod-nome" placeholder="Ex: Bolo de chocolate" />
+        </div>
+        <div class="input-group">
+          <label>Categoria</label>
+          <input type="text" id="prod-categoria" placeholder="Ex: Confeitaria" />
+        </div>
+        <div class="row-2">
+          <div class="input-group">
+            <label>Quantidade em estoque *</label>
+            <input type="number" id="prod-qtd" placeholder="0" min="0" />
+          </div>
+          <div class="input-group">
+            <label>Unidade</label>
+            <input type="text" id="prod-unidade" placeholder="un, kg, cx..." />
+          </div>
+        </div>
+        <div class="row-2">
+          <div class="input-group">
+            <label>Preço de custo (R$)</label>
+            <input type="number" id="prod-custo" placeholder="0,00" step="0.01" min="0" />
+          </div>
+          <div class="input-group">
+            <label>Preço de venda (R$)</label>
+            <input type="number" id="prod-preco" placeholder="0,00" step="0.01" min="0" />
+          </div>
+        </div>
+        <div class="input-group">
+          <label>Estoque mínimo (alerta)</label>
+          <input type="number" id="prod-minimo" placeholder="5" min="0" />
+        </div>
+        <div class="input-group">
+          <label>Observações</label>
+          <textarea id="prod-obs" placeholder="Notas sobre o produto..."></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-ghost" onclick="closeModal('modal-produto')">Cancelar</button>
+        <button class="btn-primary" onclick="saveProduto()">Salvar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: VENDA -->
+  <div class="modal-backdrop" id="modal-venda">
+    <div class="modal modal-lg">
+      <div class="modal-header">
+        <h3 id="modal-venda-title">Nova Venda</h3>
+        <button onclick="closeModal('modal-venda')">✕</button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="venda-id" />
+        <div class="row-2">
+          <div class="input-group">
+            <label>Cliente *</label>
+            <input type="text" id="venda-cliente" placeholder="Nome do cliente" />
+          </div>
+          <div class="input-group">
+            <label>Telefone / contato</label>
+            <input type="text" id="venda-contato" placeholder="(47) 99999-9999" />
+          </div>
+        </div>
+        <div class="row-2">
+          <div class="input-group">
+            <label>Data da venda</label>
+            <input type="date" id="venda-data" />
+          </div>
+          <div class="input-group">
+            <label>Data de entrega</label>
+            <input type="date" id="venda-entrega" />
+          </div>
+        </div>
+
+        <div class="section-title small">Itens da Venda</div>
+        <div class="item-add-row">
+          <select id="venda-prod-select">
+            <option value="">Selecionar produto...</option>
+          </select>
+          <input type="number" id="venda-item-qtd" placeholder="Qtd" min="1" value="1" />
+          <button class="btn-sm" onclick="addItemVenda()">Adicionar</button>
+        </div>
+        <div id="venda-itens-list" class="itens-list"></div>
+        <div class="venda-total-row">
+          <span>Total:</span>
+          <span id="venda-total-display">R$ 0,00</span>
+        </div>
+
+        <div class="row-2">
+          <div class="input-group">
+            <label>Forma de pagamento</label>
+            <select id="venda-pagamento">
+              <option value="">Selecionar...</option>
+              <option>Dinheiro</option>
+              <option>PIX</option>
+              <option>Cartão de débito</option>
+              <option>Cartão de crédito</option>
+              <option>Transferência</option>
+              <option>A combinar</option>
+            </select>
+          </div>
+          <div class="input-group">
+            <label>Status do pagamento</label>
+            <select id="venda-pag-status">
+              <option value="pendente">Pendente</option>
+              <option value="pago">Pago</option>
+              <option value="parcial">Parcial</option>
+            </select>
+          </div>
+        </div>
+        <div class="input-group">
+          <label>Observações</label>
+          <textarea id="venda-obs" placeholder="Endereço de entrega, instruções especiais..."></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-ghost" onclick="closeModal('modal-venda')">Cancelar</button>
+        <button class="btn-primary" onclick="saveVenda()">Salvar Venda</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: CONFIRMAR PRODUÇÃO -->
+  <div class="modal-backdrop" id="modal-producao">
+    <div class="modal modal-sm">
+      <div class="modal-header">
+        <h3>Confirmar Produção</h3>
+        <button onclick="closeModal('modal-producao')">✕</button>
+      </div>
+      <div class="modal-body">
+        <p id="prod-confirm-text"></p>
+        <div class="input-group">
+          <label>Observação (opcional)</label>
+          <textarea id="prod-confirm-obs" placeholder="Ex: produzido com variação no recheio..."></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-ghost" onclick="closeModal('modal-producao')">Cancelar</button>
+        <button class="btn-primary" onclick="confirmarProducao()">✓ Marcar como Produzido</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- TOAST -->
+  <div id="toast" class="toast"></div>
+
+  <!-- Firebase SDK -->
+  <script type="module" src="firebase-config.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
