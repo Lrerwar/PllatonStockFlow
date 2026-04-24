@@ -15,12 +15,21 @@ import { getFirestore } from "https://www.gstatic.com/firebasejs/10.12.0/firebas
 
 // ⚠️  SUBSTITUA PELOS DADOS DO SEU PROJETO FIREBASE
 const firebaseConfig = {
-  apiKey: "SUA_API_KEY",
-  authDomain: "SEU_PROJETO.firebaseapp.com",
-  projectId: "SEU_PROJETO_ID",
-  storageBucket: "SEU_PROJETO.appspot.com",
-  messagingSenderId: "SEU_SENDER_ID",
-  appId: "SEU_APP_ID"
+
+  apiKey: "AIzaSyCFKyNNfhLTTiWFXk-aZBDhMtujzFGRLlM",
+
+  authDomain: "stokflow-pllaton.firebaseapp.com",
+
+  projectId: "stokflow-pllaton",
+
+  storageBucket: "stokflow-pllaton.firebasestorage.app",
+
+  messagingSenderId: "31756276670",
+
+  appId: "1:31756276670:web:ef5268f539a92bb63b1fef",
+
+  measurementId: "G-ZX7LSQGLQZ"
+
 };
 
 const app = initializeApp(firebaseConfig);
