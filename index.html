@@ -6,11 +6,12 @@
   <title>StockFlow — Gestão de Estoque</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
 
-  <!-- LOGIN SCREEN -->
+  <!-- LOGIN -->
   <div id="login-screen" class="screen active">
     <div class="login-bg"></div>
     <div class="login-box">
@@ -31,7 +32,7 @@
     </div>
   </div>
 
-  <!-- REGISTER SCREEN -->
+  <!-- REGISTER -->
   <div id="register-screen" class="screen">
     <div class="login-bg"></div>
     <div class="login-box">
@@ -56,10 +57,22 @@
     </div>
   </div>
 
+  <!-- ACESSO NEGADO -->
+  <div id="denied-screen" class="screen">
+    <div class="login-bg"></div>
+    <div class="login-box" style="text-align:center">
+      <div class="logo-mark" style="background:var(--danger);margin:0 auto 0.5rem">✕</div>
+      <h1 class="brand" style="color:var(--danger)">Acesso Negado</h1>
+      <p style="color:var(--text-muted);margin-top:0.5rem;font-size:0.85rem">
+        Este e-mail não tem permissão para acessar o sistema.<br>Entre em contato com o administrador.
+      </p>
+      <button class="btn-ghost" style="margin-top:1rem" onclick="logout()">← Sair</button>
+    </div>
+  </div>
+
   <!-- MAIN APP -->
   <div id="app-screen" class="screen">
 
-    <!-- SIDEBAR -->
     <nav class="sidebar" id="sidebar">
       <div class="sidebar-header">
         <div class="logo-mark small">SF</div>
@@ -67,21 +80,14 @@
         <button class="sidebar-close" onclick="toggleSidebar()">✕</button>
       </div>
       <ul class="nav-links">
-        <li><a href="#" class="nav-item active" data-page="dashboard" onclick="navigate('dashboard',this)">
-          <span class="nav-icon">◈</span> Dashboard
-        </a></li>
-        <li><a href="#" class="nav-item" data-page="estoque" onclick="navigate('estoque',this)">
-          <span class="nav-icon">◫</span> Estoque
-        </a></li>
-        <li><a href="#" class="nav-item" data-page="vendas" onclick="navigate('vendas',this)">
-          <span class="nav-icon">◉</span> Vendas
-        </a></li>
-        <li><a href="#" class="nav-item" data-page="producao" onclick="navigate('producao',this)">
-          <span class="nav-icon">◌</span> Produção
-        </a></li>
-        <li><a href="#" class="nav-item" data-page="historico" onclick="navigate('historico',this)">
-          <span class="nav-icon">◷</span> Histórico
-        </a></li>
+        <li><a href="#" class="nav-item active" onclick="navigate('dashboard',this)"><span class="nav-icon">◈</span> Dashboard</a></li>
+        <li><a href="#" class="nav-item" onclick="navigate('estoque',this)"><span class="nav-icon">◫</span> Estoque</a></li>
+        <li><a href="#" class="nav-item" onclick="navigate('vendas',this)"><span class="nav-icon">◉</span> Vendas</a></li>
+        <li><a href="#" class="nav-item" onclick="navigate('producao',this)"><span class="nav-icon">◌</span> Produção</a></li>
+        <li><a href="#" class="nav-item" onclick="navigate('historico',this)"><span class="nav-icon">◷</span> Histórico</a></li>
+        <li id="nav-admin-li" style="display:none">
+          <a href="#" class="nav-item" onclick="navigate('admin',this)"><span class="nav-icon">⚙</span> Admin</a>
+        </li>
       </ul>
       <div class="sidebar-footer">
         <span id="user-display" class="user-name"></span>
@@ -89,20 +95,18 @@
       </div>
     </nav>
 
-    <!-- OVERLAY -->
     <div class="overlay" id="overlay" onclick="toggleSidebar()"></div>
 
-    <!-- MAIN CONTENT -->
     <main class="main-content">
       <header class="top-bar">
         <button class="menu-btn" onclick="toggleSidebar()">☰</button>
         <h2 class="page-title" id="page-title">Dashboard</h2>
         <div class="top-right">
-          <span class="sync-dot" id="sync-dot" title="Sincronizado"></span>
+          <span class="sync-dot" id="sync-dot"></span>
         </div>
       </header>
 
-      <!-- DASHBOARD PAGE -->
+      <!-- DASHBOARD -->
       <div class="page active" id="page-dashboard">
         <div class="stats-grid">
           <div class="stat-card">
@@ -123,18 +127,33 @@
           </div>
         </div>
 
-        <div class="section-title">Vendas Pendentes de Produção</div>
-        <div id="dash-pendentes" class="card-list">
-          <div class="empty-state">Nenhuma venda pendente</div>
+        <div class="chart-card">
+          <div class="chart-header">
+            <span class="section-title" style="margin:0">Evolução ao longo do tempo</span>
+            <div class="chart-filters">
+              <button class="tab active" onclick="setChartPeriod('semana',this)">Semana</button>
+              <button class="tab" onclick="setChartPeriod('mes',this)">Mês</button>
+              <button class="tab" onclick="setChartPeriod('ano',this)">Ano</button>
+            </div>
+          </div>
+          <div class="chart-legend">
+            <span class="legend-dot" style="background:#c8f135"></span><span>Estoque total</span>
+            <span class="legend-dot" style="background:#5b8fff"></span><span>Pedidos</span>
+            <span class="legend-dot" style="background:#2ed573"></span><span>Produzidos</span>
+          </div>
+          <div class="chart-wrap">
+            <canvas id="dashChart"></canvas>
+          </div>
         </div>
+
+        <div class="section-title">Vendas Pendentes de Produção</div>
+        <div id="dash-pendentes" class="card-list"><div class="empty-state">Nenhuma venda pendente</div></div>
 
         <div class="section-title">Estoque Baixo <span class="badge warn">Atenção</span></div>
-        <div id="dash-estoque-baixo" class="card-list">
-          <div class="empty-state">Estoque em dia</div>
-        </div>
+        <div id="dash-estoque-baixo" class="card-list"><div class="empty-state">Estoque em dia</div></div>
       </div>
 
-      <!-- ESTOQUE PAGE -->
+      <!-- ESTOQUE -->
       <div class="page" id="page-estoque">
         <div class="page-actions">
           <button class="btn-primary" onclick="openModal('modal-produto')">+ Novo Produto</button>
@@ -142,12 +161,10 @@
         <div class="search-bar">
           <input type="text" id="search-estoque" placeholder="Buscar produto..." oninput="renderEstoque()" />
         </div>
-        <div id="list-estoque" class="table-wrap">
-          <div class="empty-state">Nenhum produto cadastrado</div>
-        </div>
+        <div id="list-estoque" class="table-wrap"><div class="empty-state">Nenhum produto cadastrado</div></div>
       </div>
 
-      <!-- VENDAS PAGE -->
+      <!-- VENDAS -->
       <div class="page" id="page-vendas">
         <div class="page-actions">
           <button class="btn-primary" onclick="openModal('modal-venda')">+ Nova Venda</button>
@@ -157,21 +174,17 @@
           <button class="tab" onclick="filterVendas('produzido',this)">Produzidas</button>
           <button class="tab" onclick="filterVendas('todos',this)">Todas</button>
         </div>
-        <div id="list-vendas" class="card-list">
-          <div class="empty-state">Nenhuma venda cadastrada</div>
-        </div>
+        <div id="list-vendas" class="card-list"><div class="empty-state">Nenhuma venda cadastrada</div></div>
       </div>
 
-      <!-- PRODUÇÃO PAGE -->
+      <!-- PRODUÇÃO -->
       <div class="page" id="page-producao">
         <div class="section-title">Itens para Produzir</div>
-        <p class="page-hint">Marque como produzido para mover ao histórico</p>
-        <div id="list-producao" class="card-list">
-          <div class="empty-state">Nada para produzir agora 🎉</div>
-        </div>
+        <p class="page-hint">Ao marcar como produzido, o estoque é descontado automaticamente</p>
+        <div id="list-producao" class="card-list"><div class="empty-state">Nada para produzir agora 🎉</div></div>
       </div>
 
-      <!-- HISTÓRICO PAGE -->
+      <!-- HISTÓRICO -->
       <div class="page" id="page-historico">
         <div class="filter-row">
           <input type="date" id="hist-from" />
@@ -180,15 +193,27 @@
           <button class="btn-sm" onclick="renderHistorico()">Filtrar</button>
           <button class="btn-sm ghost" onclick="clearHistFilter()">Limpar</button>
         </div>
-        <div id="list-historico" class="card-list">
-          <div class="empty-state">Nenhum item no histórico</div>
+        <div id="list-historico" class="card-list"><div class="empty-state">Nenhum item no histórico</div></div>
+      </div>
+
+      <!-- ADMIN -->
+      <div class="page" id="page-admin">
+        <div class="section-title">E-mails Autorizados</div>
+        <p class="page-hint">Somente os e-mails listados podem acessar. O admin sempre tem acesso.</p>
+        <div class="input-group" style="max-width:420px;margin-bottom:1rem">
+          <label>Adicionar e-mail</label>
+          <div style="display:flex;gap:0.5rem">
+            <input type="email" id="admin-email-input" placeholder="novo@email.com" />
+            <button class="btn-primary" onclick="adicionarEmail()">Adicionar</button>
+          </div>
         </div>
+        <div id="admin-emails-list" class="table-wrap"><div class="empty-state">Carregando...</div></div>
       </div>
 
     </main>
   </div>
 
-  <!-- MODAL: PRODUTO -->
+  <!-- MODAL PRODUTO -->
   <div class="modal-backdrop" id="modal-produto">
     <div class="modal">
       <div class="modal-header">
@@ -197,42 +222,18 @@
       </div>
       <div class="modal-body">
         <input type="hidden" id="prod-id" />
-        <div class="input-group">
-          <label>Nome do produto *</label>
-          <input type="text" id="prod-nome" placeholder="Ex: Bolo de chocolate" />
-        </div>
-        <div class="input-group">
-          <label>Categoria</label>
-          <input type="text" id="prod-categoria" placeholder="Ex: Confeitaria" />
+        <div class="input-group"><label>Nome *</label><input type="text" id="prod-nome" placeholder="Ex: Bolo de chocolate" /></div>
+        <div class="input-group"><label>Categoria</label><input type="text" id="prod-categoria" placeholder="Ex: Confeitaria" /></div>
+        <div class="row-2">
+          <div class="input-group"><label>Quantidade em estoque *</label><input type="number" id="prod-qtd" placeholder="0" min="0" /></div>
+          <div class="input-group"><label>Unidade</label><input type="text" id="prod-unidade" placeholder="un, kg, cx..." /></div>
         </div>
         <div class="row-2">
-          <div class="input-group">
-            <label>Quantidade em estoque *</label>
-            <input type="number" id="prod-qtd" placeholder="0" min="0" />
-          </div>
-          <div class="input-group">
-            <label>Unidade</label>
-            <input type="text" id="prod-unidade" placeholder="un, kg, cx..." />
-          </div>
+          <div class="input-group"><label>Preço de custo (R$)</label><input type="number" id="prod-custo" placeholder="0,00" step="0.01" min="0" /></div>
+          <div class="input-group"><label>Preço de venda (R$)</label><input type="number" id="prod-preco" placeholder="0,00" step="0.01" min="0" /></div>
         </div>
-        <div class="row-2">
-          <div class="input-group">
-            <label>Preço de custo (R$)</label>
-            <input type="number" id="prod-custo" placeholder="0,00" step="0.01" min="0" />
-          </div>
-          <div class="input-group">
-            <label>Preço de venda (R$)</label>
-            <input type="number" id="prod-preco" placeholder="0,00" step="0.01" min="0" />
-          </div>
-        </div>
-        <div class="input-group">
-          <label>Estoque mínimo (alerta)</label>
-          <input type="number" id="prod-minimo" placeholder="5" min="0" />
-        </div>
-        <div class="input-group">
-          <label>Observações</label>
-          <textarea id="prod-obs" placeholder="Notas sobre o produto..."></textarea>
-        </div>
+        <div class="input-group"><label>Estoque mínimo (alerta)</label><input type="number" id="prod-minimo" placeholder="5" min="0" /></div>
+        <div class="input-group"><label>Observações</label><textarea id="prod-obs" placeholder="Notas sobre o produto..."></textarea></div>
       </div>
       <div class="modal-footer">
         <button class="btn-ghost" onclick="closeModal('modal-produto')">Cancelar</button>
@@ -241,7 +242,7 @@
     </div>
   </div>
 
-  <!-- MODAL: VENDA -->
+  <!-- MODAL VENDA -->
   <div class="modal-backdrop" id="modal-venda">
     <div class="modal modal-lg">
       <div class="modal-header">
@@ -251,51 +252,29 @@
       <div class="modal-body">
         <input type="hidden" id="venda-id" />
         <div class="row-2">
-          <div class="input-group">
-            <label>Cliente *</label>
-            <input type="text" id="venda-cliente" placeholder="Nome do cliente" />
-          </div>
-          <div class="input-group">
-            <label>Telefone / contato</label>
-            <input type="text" id="venda-contato" placeholder="(47) 99999-9999" />
-          </div>
+          <div class="input-group"><label>Cliente *</label><input type="text" id="venda-cliente" placeholder="Nome do cliente" /></div>
+          <div class="input-group"><label>Telefone / contato</label><input type="text" id="venda-contato" placeholder="(47) 99999-9999" /></div>
         </div>
         <div class="row-2">
-          <div class="input-group">
-            <label>Data da venda</label>
-            <input type="date" id="venda-data" />
-          </div>
-          <div class="input-group">
-            <label>Data de entrega</label>
-            <input type="date" id="venda-entrega" />
-          </div>
+          <div class="input-group"><label>Data da venda</label><input type="date" id="venda-data" /></div>
+          <div class="input-group"><label>Data de entrega</label><input type="date" id="venda-entrega" /></div>
         </div>
-
         <div class="section-title small">Itens da Venda</div>
         <div class="item-add-row">
-          <select id="venda-prod-select">
-            <option value="">Selecionar produto...</option>
-          </select>
+          <select id="venda-prod-select"><option value="">Selecionar produto...</option></select>
           <input type="number" id="venda-item-qtd" placeholder="Qtd" min="1" value="1" />
           <button class="btn-sm" onclick="addItemVenda()">Adicionar</button>
         </div>
         <div id="venda-itens-list" class="itens-list"></div>
-        <div class="venda-total-row">
-          <span>Total:</span>
-          <span id="venda-total-display">R$ 0,00</span>
-        </div>
-
+        <div class="venda-total-row"><span>Total:</span><span id="venda-total-display">R$ 0,00</span></div>
         <div class="row-2">
           <div class="input-group">
             <label>Forma de pagamento</label>
             <select id="venda-pagamento">
               <option value="">Selecionar...</option>
-              <option>Dinheiro</option>
-              <option>PIX</option>
-              <option>Cartão de débito</option>
-              <option>Cartão de crédito</option>
-              <option>Transferência</option>
-              <option>A combinar</option>
+              <option>Dinheiro</option><option>PIX</option>
+              <option>Cartão de débito</option><option>Cartão de crédito</option>
+              <option>Transferência</option><option>A combinar</option>
             </select>
           </div>
           <div class="input-group">
@@ -307,10 +286,7 @@
             </select>
           </div>
         </div>
-        <div class="input-group">
-          <label>Observações</label>
-          <textarea id="venda-obs" placeholder="Endereço de entrega, instruções especiais..."></textarea>
-        </div>
+        <div class="input-group"><label>Observações</label><textarea id="venda-obs" placeholder="Endereço, instruções especiais..."></textarea></div>
       </div>
       <div class="modal-footer">
         <button class="btn-ghost" onclick="closeModal('modal-venda')">Cancelar</button>
@@ -319,7 +295,7 @@
     </div>
   </div>
 
-  <!-- MODAL: CONFIRMAR PRODUÇÃO -->
+  <!-- MODAL PRODUÇÃO -->
   <div class="modal-backdrop" id="modal-producao">
     <div class="modal modal-sm">
       <div class="modal-header">
@@ -327,10 +303,11 @@
         <button onclick="closeModal('modal-producao')">✕</button>
       </div>
       <div class="modal-body">
-        <p id="prod-confirm-text"></p>
-        <div class="input-group">
+        <p id="prod-confirm-text" style="white-space:pre-line;font-size:0.85rem;color:var(--text-muted)"></p>
+        <div id="prod-estoque-aviso" style="margin-top:0.5rem"></div>
+        <div class="input-group" style="margin-top:0.75rem">
           <label>Observação (opcional)</label>
-          <textarea id="prod-confirm-obs" placeholder="Ex: produzido com variação no recheio..."></textarea>
+          <textarea id="prod-confirm-obs" placeholder="Ex: produzido com variação..."></textarea>
         </div>
       </div>
       <div class="modal-footer">
@@ -340,10 +317,8 @@
     </div>
   </div>
 
-  <!-- TOAST -->
   <div id="toast" class="toast"></div>
 
-  <!-- Firebase SDK -->
   <script type="module" src="firebase-config.js"></script>
   <script type="module" src="app.js"></script>
 </body>
