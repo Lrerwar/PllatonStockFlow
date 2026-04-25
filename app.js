@@ -1,95 +1,82 @@
 // =============================================
-// STOCKFLOW — APP.JS v3
-// · Whitelist de e-mails (admin controla acesso)
-// · Desconto automático de estoque ao produzir
-// · Gráfico de linha no dashboard (semana/mês/ano)
+// STOCKFLOW PRO — APP.JS v4
+// Insumos · Produtos · Receitas (BOM) · Pedidos
+// Produção · Movimentações · Whitelist · Gráfico
 // =============================================
 
 import { auth, db } from "./firebase-config.js";
 import {
-  createUserWithEmailAndPassword,
-  signInWithEmailAndPassword,
-  signOut,
-  onAuthStateChanged,
-  updateProfile
+  createUserWithEmailAndPassword, signInWithEmailAndPassword,
+  signOut, onAuthStateChanged, updateProfile
 } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 import {
-  collection, addDoc, updateDoc, deleteDoc,
-  doc, query, where, onSnapshot, serverTimestamp,
-  getDoc, setDoc, writeBatch
+  collection, addDoc, updateDoc, deleteDoc, doc,
+  query, where, onSnapshot, serverTimestamp,
+  getDoc, setDoc, getDocs, writeBatch, increment
 } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
 // =============================================
-// COLEÇÕES / DOCUMENTOS
+// COLEÇÕES
 // =============================================
-const COL_PRODUTOS  = collection(db, "compartilhado", "principal", "produtos");
-const COL_VENDAS    = collection(db, "compartilhado", "principal", "vendas");
-const DOC_CONFIG    = doc(db, "compartilhado", "config");
-// Coleção de snapshots diários para o gráfico
-const COL_SNAPSHOTS = collection(db, "compartilhado", "principal", "snapshots");
+const C = {
+  insumos:       collection(db, "compartilhado", "principal", "insumos"),
+  produtos:      collection(db, "compartilhado", "principal", "produtos"),
+  receitas:      collection(db, "compartilhado", "principal", "receitas"),
+  pedidos:       collection(db, "compartilhado", "principal", "pedidos"),
+  movimentacoes: collection(db, "compartilhado", "principal", "movimentacoes"),
+};
+const DOC_CONFIG = doc(db, "compartilhado", "config");
 
 // =============================================
 // STATE
 // =============================================
-let currentUser        = null;
-let isAdmin            = false;
-let emailsPermitidos   = [];
-let adminEmail         = "";
+let currentUser       = null;
+let isAdmin           = false;
+let adminEmail        = "";
+let emailsPermitidos  = [];
 
-let produtos           = [];
-let vendas             = [];
-let historico          = [];
-let vendaItensTemp     = [];
-let pendingVendaId     = null;
-let currentVendasFilter = "pendente";
+let insumos           = [];
+let produtos          = [];
+let receitas          = [];
+let pedidos           = [];
+let movimentacoes     = [];
 
-let chartPeriod        = "semana";
-let dashChartInstance  = null;
-let snapshots          = [];   // dados do gráfico
+let receitaMateriais  = [];   // temp p/ modal receita
+let pendingPedidoId   = null;
+let pedidosFiltro     = "pendente";
+let chartPeriod       = "semana";
+let dashChartInstance = null;
 
-let unsubProdutos      = null;
-let unsubVendas        = null;
-let unsubHistorico     = null;
-let unsubConfig        = null;
-let unsubSnapshots     = null;
+let unsubs = {};
 
 // =============================================
 // AUTH
 // =============================================
 onAuthStateChanged(auth, async (user) => {
   if (!user) {
-    currentUser = null;
-    isAdmin     = false;
-    unsubscribeAll();
-    resetState();
+    currentUser = null; isAdmin = false;
+    Object.values(unsubs).forEach(u => u && u());
+    unsubs = {};
     showScreen("login-screen");
     return;
   }
-
   currentUser = user;
   const email = user.email?.toLowerCase() || "";
 
-  // Carrega config de whitelist
   const configSnap = await getDoc(DOC_CONFIG);
   let config = configSnap.exists() ? configSnap.data() : null;
-
-  // Primeiro acesso: cria config com este usuário como admin
   if (!config) {
     config = { admin: email, permitidos: [email] };
     await setDoc(DOC_CONFIG, config);
   }
-
-  adminEmail       = config.admin || "";
+  adminEmail      = config.admin || "";
   emailsPermitidos = config.permitidos || [];
-  isAdmin          = (email === adminEmail);
+  isAdmin         = email === adminEmail;
 
-  // Verifica whitelist
   if (!emailsPermitidos.includes(email) && !isAdmin) {
-    showScreen("denied-screen");
-    return;
+    showScreen("denied-screen"); return;
   }
 
-  // Acesso permitido
   document.getElementById("user-display").textContent = user.displayName || email;
   document.getElementById("nav-admin-li").style.display = isAdmin ? "" : "none";
   showScreen("app-screen");
@@ -97,103 +84,80 @@ onAuthStateChanged(auth, async (user) => {
   subscribeConfig();
 });
 
-window.login = async function () {
-  const email = document.getElementById("login-email").value.trim();
-  const pass  = document.getElementById("login-password").value;
+window.login = async () => {
+  const email = v("login-email"), pass = v("login-password");
   const err   = document.getElementById("login-error");
   err.textContent = "";
-  try {
-    await signInWithEmailAndPassword(auth, email, pass);
-  } catch (e) {
-    err.textContent = friendlyError(e.code);
-  }
+  try { await signInWithEmailAndPassword(auth, email, pass); }
+  catch (e) { err.textContent = friendlyError(e.code); }
 };
 
-window.register = async function () {
-  const name  = document.getElementById("reg-name").value.trim();
-  const email = document.getElementById("reg-email").value.trim();
-  const pass  = document.getElementById("reg-password").value;
-  const err   = document.getElementById("reg-error");
+window.register = async () => {
+  const name = v("reg-name"), email = v("reg-email"), pass = v("reg-password");
+  const err  = document.getElementById("reg-error");
   err.textContent = "";
   if (!name) { err.textContent = "Informe um nome."; return; }
   try {
     const cred = await createUserWithEmailAndPassword(auth, email, pass);
     await updateProfile(cred.user, { displayName: name });
-    showToast("Conta criada! Aguarde aprovação do admin.", "success");
-  } catch (e) {
-    err.textContent = friendlyError(e.code);
-  }
+    showToast("Conta criada!", "success");
+  } catch (e) { err.textContent = friendlyError(e.code); }
 };
 
-window.logout = async function () {
-  await signOut(auth);
-};
+window.logout = () => signOut(auth);
 
-function friendlyError(code) {
-  const map = {
+function friendlyError(c) {
+  return ({
     "auth/invalid-email":        "E-mail inválido.",
     "auth/user-not-found":       "Usuário não encontrado.",
     "auth/wrong-password":       "Senha incorreta.",
     "auth/email-already-in-use": "E-mail já cadastrado.",
-    "auth/weak-password":        "Senha fraca (mínimo 6 caracteres).",
+    "auth/weak-password":        "Senha fraca (mín. 6 chars).",
     "auth/invalid-credential":   "E-mail ou senha incorretos."
-  };
-  return map[code] || "Erro ao autenticar. Tente novamente.";
+  }[c]) || "Erro ao autenticar.";
 }
 
 // =============================================
-// ADMIN — WHITELIST
+// WHITELIST ADMIN
 // =============================================
 function subscribeConfig() {
-  unsubConfig = onSnapshot(DOC_CONFIG, (snap) => {
+  unsubs.config = onSnapshot(DOC_CONFIG, snap => {
     if (!snap.exists()) return;
-    const data = snap.data();
-    emailsPermitidos = data.permitidos || [];
-    adminEmail       = data.admin || "";
+    const d = snap.data();
+    emailsPermitidos = d.permitidos || [];
+    adminEmail       = d.admin || "";
     renderAdminEmails();
   });
 }
 
-window.adicionarEmail = async function () {
+window.adicionarEmail = async () => {
   if (!isAdmin) return;
   const input = document.getElementById("admin-email-input");
   const email = input.value.trim().toLowerCase();
-  if (!email || !email.includes("@")) { showToast("E-mail inválido.", "error"); return; }
-  if (emailsPermitidos.includes(email)) { showToast("E-mail já autorizado.", "error"); return; }
-
-  const novos = [...emailsPermitidos, email];
-  await setDoc(DOC_CONFIG, { admin: adminEmail, permitidos: novos });
+  if (!email.includes("@")) { showToast("E-mail inválido.", "error"); return; }
+  if (emailsPermitidos.includes(email)) { showToast("Já autorizado.", "error"); return; }
+  await setDoc(DOC_CONFIG, { admin: adminEmail, permitidos: [...emailsPermitidos, email] });
   input.value = "";
   showToast("E-mail adicionado!", "success");
 };
 
-window.removerEmail = async function (email) {
-  if (!isAdmin) return;
-  if (email === adminEmail) { showToast("Não é possível remover o admin.", "error"); return; }
-  const novos = emailsPermitidos.filter(e => e !== email);
-  await setDoc(DOC_CONFIG, { admin: adminEmail, permitidos: novos });
-  showToast("E-mail removido.", "success");
+window.removerEmail = async (email) => {
+  if (!isAdmin || email === adminEmail) return;
+  await setDoc(DOC_CONFIG, { admin: adminEmail, permitidos: emailsPermitidos.filter(e => e !== email) });
+  showToast("Removido.", "success");
 };
 
 function renderAdminEmails() {
-  const list = document.getElementById("admin-emails-list");
-  if (!list) return;
-  if (!emailsPermitidos.length) {
-    list.innerHTML = '<div class="empty-state">Nenhum e-mail autorizado</div>';
-    return;
-  }
-  list.innerHTML = `<table>
-    <thead><tr><th>E-mail</th><th>Papel</th><th>Ação</th></tr></thead>
-    <tbody>
-    ${emailsPermitidos.map(e => `<tr>
+  const el = document.getElementById("admin-emails-list");
+  if (!el) return;
+  if (!emailsPermitidos.length) { el.innerHTML = '<div class="empty-state">Vazio</div>'; return; }
+  el.innerHTML = `<table>
+    <thead><tr><th>E-mail</th><th>Papel</th><th></th></tr></thead>
+    <tbody>${emailsPermitidos.map(e => `<tr>
       <td>${e}</td>
       <td>${e === adminEmail ? '<span class="badge success">Admin</span>' : '<span class="badge neutral">Usuário</span>'}</td>
-      <td>${e !== adminEmail
-        ? `<button class="btn-sm danger" onclick="removerEmail('${e}')">Remover</button>`
-        : "—"
-      }</td>
-    </tr>`).join("")}
-    </tbody>
+      <td>${e !== adminEmail ? `<button class="btn-sm danger" onclick="removerEmail('${e}')">Remover</button>` : "—"}</td>
+    </tr>`).join("")}</tbody>
   </table>`;
 }
 
@@ -201,84 +165,99 @@ function renderAdminEmails() {
 // SUBSCRIPTIONS
 // =============================================
 function subscribeAll() {
-  unsubProdutos = onSnapshot(COL_PRODUTOS, (snap) => {
+  unsubs.insumos = onSnapshot(C.insumos, snap => {
+    insumos = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    insumos.sort((a, b) => (a.nome||"").localeCompare(b.nome||""));
+    renderAll(); setSynced();
+  });
+  unsubs.produtos = onSnapshot(C.produtos, snap => {
     produtos = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    produtos.sort((a, b) => (a.nome || "").localeCompare(b.nome || ""));
-    renderAll();
-    salvarSnapshotHoje();
-    setSynced();
+    produtos.sort((a, b) => (a.nome||"").localeCompare(b.nome||""));
+    renderAll(); setSynced();
   });
-
-  unsubVendas = onSnapshot(
-    query(COL_VENDAS, where("status", "==", "pendente")),
-    (snap) => {
-      vendas = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      vendas.sort((a, b) => tsToMs(b.criadoEm) - tsToMs(a.criadoEm));
-      renderAll();
-      salvarSnapshotHoje();
-      setSynced();
-    }
-  );
-
-  unsubHistorico = onSnapshot(
-    query(COL_VENDAS, where("status", "==", "produzido")),
-    (snap) => {
-      historico = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      historico.sort((a, b) => tsToMs(b.produzidoEm) - tsToMs(a.produzidoEm));
-      renderHistorico();
-      updateStats();
-      setSynced();
-    }
-  );
-
-  // Snapshots para o gráfico (últimos 400 registros é suficiente para anos)
-  unsubSnapshots = onSnapshot(COL_SNAPSHOTS, (snap) => {
-    snapshots = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    snapshots.sort((a, b) => (a.id > b.id ? 1 : -1));
-    buildChart();
+  unsubs.receitas = onSnapshot(C.receitas, snap => {
+    receitas = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    renderAll(); setSynced();
+  });
+  unsubs.pedidos = onSnapshot(C.pedidos, snap => {
+    pedidos = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    pedidos.sort((a, b) => tsToMs(b.criadoEm) - tsToMs(a.criadoEm));
+    renderAll(); setSynced();
+  });
+  unsubs.movimentacoes = onSnapshot(C.movimentacoes, snap => {
+    movimentacoes = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    movimentacoes.sort((a, b) => tsToMs(b.criadoEm) - tsToMs(a.criadoEm));
+    renderMovimentacoes(); updateStats(); buildChart(); setSynced();
   });
 }
 
-function unsubscribeAll() {
-  [unsubProdutos, unsubVendas, unsubHistorico, unsubConfig, unsubSnapshots]
-    .forEach(u => u && u());
+// =============================================
+// NAVIGATION
+// =============================================
+const pageTitles = {
+  dashboard:"Dashboard", insumos:"Insumos", produtos:"Produtos",
+  receitas:"Receitas (BOM)", pedidos:"Pedidos", producao:"Produção",
+  movimentacoes:"Histórico de Movimentações", admin:"Administração"
+};
+
+window.navigate = (page, el) => {
+  document.querySelectorAll(".page").forEach(p => p.classList.remove("active"));
+  document.querySelectorAll(".nav-item").forEach(n => n.classList.remove("active"));
+  document.getElementById("page-" + page).classList.add("active");
+  if (el) el.classList.add("active");
+  document.getElementById("page-title").textContent = pageTitles[page] || page;
+  closeSidebarMobile();
+  ({
+    dashboard:       renderDashboard,
+    insumos:         renderInsumos,
+    produtos:        renderProdutos,
+    receitas:        renderReceitas,
+    pedidos:         renderPedidos,
+    producao:        renderProducao,
+    movimentacoes:   renderMovimentacoes,
+    admin:           renderAdminEmails
+  }[page] || (() => {}))();
+};
+
+window.toggleSidebar = () => {
+  document.getElementById("sidebar").classList.toggle("open");
+  document.getElementById("overlay").classList.toggle("show");
+};
+function closeSidebarMobile() {
+  if (window.innerWidth <= 768) {
+    document.getElementById("sidebar").classList.remove("open");
+    document.getElementById("overlay").classList.remove("show");
+  }
 }
 
-function resetState() {
-  produtos = []; vendas = []; historico = []; snapshots = [];
+function renderAll() {
+  const active = document.querySelector(".page.active");
+  if (!active) return;
+  const id = active.id.replace("page-", "");
+  ({
+    dashboard: renderDashboard, insumos: renderInsumos,
+    produtos: renderProdutos, receitas: renderReceitas,
+    pedidos: renderPedidos, producao: renderProducao,
+  }[id] || (() => {}))();
+  updateStats();
 }
 
 // =============================================
-// SNAPSHOT DIÁRIO (para o gráfico)
-// Salva um documento por dia com os totais do momento
+// STATS & CHART
 // =============================================
-let snapshotThrottle = null;
-async function salvarSnapshotHoje() {
-  clearTimeout(snapshotThrottle);
-  snapshotThrottle = setTimeout(async () => {
-    const hoje = isoDate(new Date());
-    const totalEstoque = produtos.reduce((s, p) => s + (Number(p.quantidade) || 0), 0);
-    const totalPendentes = vendas.length;
-    const totalProduzidosHoje = historico.filter(v => {
-      const d = v.produzidoEm?.toDate ? v.produzidoEm.toDate() : new Date(v.produzidoEm || 0);
-      return isoDate(d) === hoje;
-    }).length;
-
-    try {
-      await setDoc(doc(COL_SNAPSHOTS, hoje), {
-        data: hoje,
-        estoque:   totalEstoque,
-        pedidos:   totalPendentes,
-        produzidos: totalProduzidosHoje
-      }, { merge: true });
-    } catch (_) {}
-  }, 2000);
+function updateStats() {
+  set("stat-insumos",  insumos.length);
+  set("stat-produtos", produtos.filter(p => p.usaEstoque && (p.estoque||0) > 0).length);
+  set("stat-pedidos",  pedidos.filter(p => p.status === "pendente").length);
+  const hoje = new Date().toDateString();
+  const movHoje = movimentacoes.filter(m => {
+    const d = m.criadoEm?.toDate ? m.criadoEm.toDate() : new Date(m.criadoEm||0);
+    return d.toDateString() === hoje;
+  }).length;
+  set("stat-mov", movHoje);
 }
 
-// =============================================
-// GRÁFICO
-// =============================================
-window.setChartPeriod = function (period, el) {
+window.setChartPeriod = (period, el) => {
   chartPeriod = period;
   document.querySelectorAll(".chart-filters .tab").forEach(t => t.classList.remove("active"));
   el.classList.add("active");
@@ -289,65 +268,45 @@ function buildChart() {
   const canvas = document.getElementById("dashChart");
   if (!canvas) return;
 
-  const now   = new Date();
-  let filtered = [];
-  let labelFn;
+  const now = new Date();
+  let labels = [], producoes = [], vendas_ = [], entradas = [];
 
-  if (chartPeriod === "semana") {
-    // últimos 7 dias
-    const cutoff = new Date(now); cutoff.setDate(cutoff.getDate() - 6);
-    filtered = snapshots.filter(s => s.data >= isoDate(cutoff));
-    labelFn  = s => {
-      const d = new Date(s.data + "T12:00:00");
-      return d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" });
-    };
-  } else if (chartPeriod === "mes") {
-    // últimos 30 dias
-    const cutoff = new Date(now); cutoff.setDate(cutoff.getDate() - 29);
-    filtered = snapshots.filter(s => s.data >= isoDate(cutoff));
-    labelFn  = s => {
-      const d = new Date(s.data + "T12:00:00");
-      return d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" });
-    };
-  } else {
-    // ano — agrupa por mês
-    const cutoff = new Date(now); cutoff.setFullYear(cutoff.getFullYear() - 1);
-    const byMonth = {};
-    snapshots
-      .filter(s => s.data >= isoDate(cutoff))
-      .forEach(s => {
-        const mes = s.data.slice(0, 7); // "2024-03"
-        if (!byMonth[mes]) byMonth[mes] = { data: mes, estoque: 0, pedidos: 0, produzidos: 0, count: 0 };
-        byMonth[mes].estoque    += s.estoque    || 0;
-        byMonth[mes].pedidos    += s.pedidos    || 0;
-        byMonth[mes].produzidos += s.produzidos || 0;
-        byMonth[mes].count++;
+  if (chartPeriod === "semana" || chartPeriod === "mes") {
+    const days = chartPeriod === "semana" ? 7 : 30;
+    for (let i = days - 1; i >= 0; i--) {
+      const d = new Date(now); d.setDate(d.getDate() - i);
+      const iso = isoDate(d);
+      labels.push(d.toLocaleDateString("pt-BR", { day:"2-digit", month:"2-digit" }));
+      const dayMovs = movimentacoes.filter(m => {
+        const md = m.criadoEm?.toDate ? m.criadoEm.toDate() : new Date(m.criadoEm||0);
+        return isoDate(md) === iso;
       });
-    // média por mês
-    filtered = Object.values(byMonth).map(m => ({
-      data: m.data,
-      estoque:    Math.round(m.estoque    / m.count),
-      pedidos:    Math.round(m.pedidos    / m.count),
-      produzidos: Math.round(m.produzidos / m.count)
-    })).sort((a, b) => a.data > b.data ? 1 : -1);
-    labelFn = s => {
-      const [y, m] = s.data.split("-");
-      return new Date(+y, +m - 1).toLocaleDateString("pt-BR", { month: "short", year: "2-digit" });
-    };
+      producoes.push(dayMovs.filter(m => m.tipo === "producao").length);
+      vendas_.push(dayMovs.filter(m => m.tipo === "venda").length);
+      entradas.push(dayMovs.filter(m => m.tipo === "entrada_insumo").length);
+    }
+  } else {
+    // Ano — agrupa por mês
+    for (let i = 11; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const mes = isoDate(d).slice(0, 7);
+      labels.push(d.toLocaleDateString("pt-BR", { month:"short", year:"2-digit" }));
+      const monthMovs = movimentacoes.filter(m => {
+        const md = m.criadoEm?.toDate ? m.criadoEm.toDate() : new Date(m.criadoEm||0);
+        return isoDate(md).slice(0, 7) === mes;
+      });
+      producoes.push(monthMovs.filter(m => m.tipo === "producao").length);
+      vendas_.push(monthMovs.filter(m => m.tipo === "venda").length);
+      entradas.push(monthMovs.filter(m => m.tipo === "entrada_insumo").length);
+    }
   }
 
-  const labels    = filtered.map(labelFn);
-  const estoque   = filtered.map(s => s.estoque    || 0);
-  const pedidos   = filtered.map(s => s.pedidos    || 0);
-  const produzidos= filtered.map(s => s.produzidos || 0);
-
   if (dashChartInstance) {
-    dashChartInstance.data.labels          = labels;
-    dashChartInstance.data.datasets[0].data = estoque;
-    dashChartInstance.data.datasets[1].data = pedidos;
-    dashChartInstance.data.datasets[2].data = produzidos;
-    dashChartInstance.update();
-    return;
+    dashChartInstance.data.labels = labels;
+    dashChartInstance.data.datasets[0].data = producoes;
+    dashChartInstance.data.datasets[1].data = vendas_;
+    dashChartInstance.data.datasets[2].data = entradas;
+    dashChartInstance.update(); return;
   }
 
   dashChartInstance = new Chart(canvas, {
@@ -355,626 +314,829 @@ function buildChart() {
     data: {
       labels,
       datasets: [
-        {
-          label: "Estoque",
-          data: estoque,
-          borderColor: "#c8f135",
-          backgroundColor: "rgba(200,241,53,0.08)",
-          tension: 0.4,
-          pointBackgroundColor: "#c8f135",
-          pointRadius: 4,
-          fill: true
-        },
-        {
-          label: "Pedidos",
-          data: pedidos,
-          borderColor: "#5b8fff",
-          backgroundColor: "rgba(91,143,255,0.08)",
-          tension: 0.4,
-          pointBackgroundColor: "#5b8fff",
-          pointRadius: 4,
-          fill: true
-        },
-        {
-          label: "Produzidos",
-          data: produzidos,
-          borderColor: "#2ed573",
-          backgroundColor: "rgba(46,213,115,0.08)",
-          tension: 0.4,
-          pointBackgroundColor: "#2ed573",
-          pointRadius: 4,
-          fill: true
-        }
+        { label:"Produções", data:producoes, borderColor:"#c8f135", backgroundColor:"rgba(200,241,53,0.08)", tension:0.4, pointBackgroundColor:"#c8f135", pointRadius:4, fill:true },
+        { label:"Vendas",    data:vendas_,   borderColor:"#5b8fff", backgroundColor:"rgba(91,143,255,0.08)",  tension:0.4, pointBackgroundColor:"#5b8fff", pointRadius:4, fill:true },
+        { label:"Entradas",  data:entradas,  borderColor:"#ff9f43", backgroundColor:"rgba(255,159,67,0.08)", tension:0.4, pointBackgroundColor:"#ff9f43", pointRadius:4, fill:true },
       ]
     },
     options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      interaction: { mode: "index", intersect: false },
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          backgroundColor: "#1c1c21",
-          borderColor: "#2a2a32",
-          borderWidth: 1,
-          titleColor: "#f0f0f2",
-          bodyColor: "#7a7a8e",
-          padding: 12
-        }
+      responsive:true, maintainAspectRatio:false,
+      interaction:{ mode:"index", intersect:false },
+      plugins:{
+        legend:{ display:false },
+        tooltip:{ backgroundColor:"#1c1c21", borderColor:"#2a2a32", borderWidth:1, titleColor:"#f0f0f2", bodyColor:"#7a7a8e", padding:12 }
       },
-      scales: {
-        x: {
-          grid: { color: "rgba(255,255,255,0.04)" },
-          ticks: { color: "#7a7a8e", font: { family: "DM Mono", size: 11 } }
-        },
-        y: {
-          grid: { color: "rgba(255,255,255,0.04)" },
-          ticks: { color: "#7a7a8e", font: { family: "DM Mono", size: 11 } },
-          beginAtZero: true
-        }
+      scales:{
+        x:{ grid:{ color:"rgba(255,255,255,0.04)" }, ticks:{ color:"#7a7a8e", font:{ family:"DM Mono", size:11 } } },
+        y:{ grid:{ color:"rgba(255,255,255,0.04)" }, ticks:{ color:"#7a7a8e", font:{ family:"DM Mono", size:11 } }, beginAtZero:true }
       }
     }
   });
 }
 
 // =============================================
-// NAVIGATION
-// =============================================
-const pageTitles = {
-  dashboard: "Dashboard", estoque: "Estoque",
-  vendas: "Vendas", producao: "Produção",
-  historico: "Histórico", admin: "Administração"
-};
-
-window.navigate = function (page, el) {
-  document.querySelectorAll(".page").forEach(p => p.classList.remove("active"));
-  document.querySelectorAll(".nav-item").forEach(n => n.classList.remove("active"));
-  document.getElementById("page-" + page).classList.add("active");
-  if (el) el.classList.add("active");
-  document.getElementById("page-title").textContent = pageTitles[page] || page;
-  closeSidebarMobile();
-  if (page === "dashboard") renderDashboard();
-  if (page === "estoque")   renderEstoque();
-  if (page === "vendas")    renderVendas();
-  if (page === "producao")  renderProducao();
-  if (page === "historico") renderHistorico();
-  if (page === "admin")     renderAdminEmails();
-};
-
-window.toggleSidebar = function () {
-  document.getElementById("sidebar").classList.toggle("open");
-  document.getElementById("overlay").classList.toggle("show");
-};
-
-function closeSidebarMobile() {
-  if (window.innerWidth <= 768) {
-    document.getElementById("sidebar").classList.remove("open");
-    document.getElementById("overlay").classList.remove("show");
-  }
-}
-
-// =============================================
-// RENDER ALL
-// =============================================
-function renderAll() {
-  const active = document.querySelector(".page.active");
-  if (!active) return;
-  const id = active.id.replace("page-", "");
-  if (id === "dashboard") renderDashboard();
-  if (id === "estoque")   renderEstoque();
-  if (id === "vendas")    renderVendas();
-  if (id === "producao")  renderProducao();
-  updateStats();
-}
-
-// =============================================
-// STATS
-// =============================================
-function updateStats() {
-  const totalEstoque = produtos.reduce((s, p) => s + (Number(p.quantidade) || 0), 0);
-  document.getElementById("stat-estoque").textContent    = totalEstoque;
-  document.getElementById("stat-pendentes").textContent  = vendas.length;
-  const hoje = new Date().toDateString();
-  const prodHoje = historico.filter(v => {
-    const d = v.produzidoEm?.toDate ? v.produzidoEm.toDate() : new Date(v.produzidoEm || 0);
-    return d.toDateString() === hoje;
-  }).length;
-  document.getElementById("stat-hoje").textContent      = prodHoje;
-  document.getElementById("stat-historico").textContent = historico.length;
-}
-
-// =============================================
 // DASHBOARD
 // =============================================
 function renderDashboard() {
-  updateStats();
-  buildChart();
+  updateStats(); buildChart();
 
-  const dashPend = document.getElementById("dash-pendentes");
-  dashPend.innerHTML = vendas.length
-    ? vendas.slice(0, 5).map(v => vendaCardHTML(v)).join("")
-    : '<div class="empty-state">Nenhuma venda pendente 🎉</div>';
-
-  const baixo = produtos.filter(p => (Number(p.quantidade)||0) <= (Number(p.minimo)||0) && (Number(p.minimo)||0) > 0);
-  const dashBaixo = document.getElementById("dash-estoque-baixo");
-  dashBaixo.innerHTML = baixo.length
-    ? `<table><thead><tr><th>Produto</th><th>Qtd</th><th>Mínimo</th></tr></thead><tbody>
-        ${baixo.map(p => `<tr>
-          <td>${p.nome}</td>
-          <td class="qty-low">${p.quantidade||0} ${p.unidade||""}</td>
-          <td>${p.minimo} ${p.unidade||""}</td>
-        </tr>`).join("")}
+  // Insumos baixo
+  const baixo = insumos.filter(i => (i.estoque||0) <= (i.estoqueMinimo||0) && (i.estoqueMinimo||0) > 0);
+  const elBaixo = document.getElementById("dash-insumos-baixo");
+  elBaixo.innerHTML = baixo.length
+    ? `<table><thead><tr><th>Insumo</th><th>Estoque</th><th>Mínimo</th></tr></thead><tbody>
+      ${baixo.map(i => `<tr>
+        <td>${i.nome}</td>
+        <td class="qty-low">${fmt(i.estoque||0)} ${i.unidade||""}</td>
+        <td>${fmt(i.estoqueMinimo)} ${i.unidade||""}</td>
+      </tr>`).join("")}
       </tbody></table>`
     : '<div class="empty-state">Estoque em dia ✓</div>';
+
+  // Pedidos pendentes
+  const pend = pedidos.filter(p => p.status === "pendente").slice(0, 5);
+  const elPed = document.getElementById("dash-pedidos");
+  elPed.innerHTML = pend.length
+    ? pend.map(p => pedidoCardHTML(p)).join("")
+    : '<div class="empty-state">Nenhum pedido pendente 🎉</div>';
 }
 
 // =============================================
-// ESTOQUE
+// INSUMOS
 // =============================================
-window.renderEstoque = function () {
-  const search   = (document.getElementById("search-estoque")?.value || "").toLowerCase();
-  const filtered = produtos.filter(p => p.nome?.toLowerCase().includes(search));
-  const list     = document.getElementById("list-estoque");
-  if (!filtered.length) { list.innerHTML = '<div class="empty-state">Nenhum produto encontrado</div>'; return; }
-  list.innerHTML = `<table>
-    <thead><tr><th>Produto</th><th>Categoria</th><th>Qtd</th><th>Unid.</th><th>Custo</th><th>Preço</th><th>Ações</th></tr></thead>
-    <tbody>
-    ${filtered.map(p => {
-      const baixo = (Number(p.quantidade)||0) <= (Number(p.minimo)||0) && (Number(p.minimo)||0) > 0;
+window.renderInsumos = () => {
+  const search = (document.getElementById("search-insumos")?.value || "").toLowerCase();
+  const fil    = insumos.filter(i => i.nome?.toLowerCase().includes(search));
+  const el     = document.getElementById("list-insumos");
+  if (!fil.length) { el.innerHTML = '<div class="empty-state">Nenhum insumo</div>'; return; }
+  el.innerHTML = `<table>
+    <thead><tr><th>Nome</th><th>Unidade</th><th>Estoque</th><th>Mínimo</th><th>Custo/un</th><th>Ações</th></tr></thead>
+    <tbody>${fil.map(i => {
+      const baixo = (i.estoque||0) <= (i.estoqueMinimo||0) && (i.estoqueMinimo||0) > 0;
+      return `<tr>
+        <td>${i.nome}</td>
+        <td><span class="badge neutral">${i.unidade||"un"}</span></td>
+        <td class="${baixo?"qty-low":"qty-ok"}">${fmt(i.estoque||0)} ${i.unidade||""}</td>
+        <td>${fmt(i.estoqueMinimo||0)} ${i.unidade||""}</td>
+        <td>${i.custo ? "R$ "+Number(i.custo).toFixed(2) : "—"}</td>
+        <td><div style="display:flex;gap:4px">
+          <button class="btn-sm" onclick="editInsumo('${i.id}')">Editar</button>
+          <button class="btn-sm success" onclick="abrirEntradaInsumo('${i.id}')">↑ Entrada</button>
+          <button class="btn-sm danger" onclick="deleteInsumo('${i.id}')">✕</button>
+        </div></td>
+      </tr>`;
+    }).join("")}</tbody>
+  </table>`;
+};
+
+window.saveInsumo = async () => {
+  const id   = v("insumo-id");
+  const nome = v("insumo-nome");
+  if (!nome) { showToast("Informe o nome.", "error"); return; }
+  const data = {
+    nome, unidade: v("insumo-unidade") || "un",
+    estoque:       parseFloat(v("insumo-estoque"))  || 0,
+    estoqueMinimo: parseFloat(v("insumo-minimo"))   || 0,
+    custo:         parseFloat(v("insumo-custo"))    || 0,
+    obs:           v("insumo-obs"),
+    atualizadoPor: currentUser.email, atualizadoEm: serverTimestamp()
+  };
+  try {
+    if (id) {
+      await updateDoc(doc(db,"compartilhado","principal","insumos",id), data);
+      showToast("Insumo atualizado!", "success");
+    } else {
+      data.criadoEm = serverTimestamp(); data.criadoPor = currentUser.email;
+      await addDoc(C.insumos, data);
+      showToast("Insumo cadastrado!", "success");
+    }
+    closeModal("modal-insumo"); clearInsumoForm();
+  } catch(e) { showToast("Erro: "+e.message, "error"); }
+};
+
+window.editInsumo = (id) => {
+  const i = insumos.find(x => x.id === id); if (!i) return;
+  set2("insumo-id", i.id); set2("insumo-nome", i.nome||"");
+  set2("insumo-unidade", i.unidade||"un"); set2("insumo-estoque", i.estoque||0);
+  set2("insumo-minimo", i.estoqueMinimo||0); set2("insumo-custo", i.custo||"");
+  set2("insumo-obs", i.obs||"");
+  document.getElementById("modal-insumo-title").textContent = "Editar Insumo";
+  openModal("modal-insumo");
+};
+
+window.deleteInsumo = async (id) => {
+  if (!confirm("Remover insumo?")) return;
+  await deleteDoc(doc(db,"compartilhado","principal","insumos",id));
+  showToast("Insumo removido.", "success");
+};
+
+function clearInsumoForm() {
+  ["insumo-id","insumo-nome","insumo-estoque","insumo-minimo","insumo-custo","insumo-obs"].forEach(id => set2(id,""));
+  set2("insumo-unidade","un");
+  document.getElementById("modal-insumo-title").textContent = "Novo Insumo";
+}
+
+// Entrada de insumo
+window.abrirEntradaInsumo = (id) => {
+  populateSelect("entrada-insumo-id", insumos, "Selecionar insumo...");
+  set2("entrada-insumo-id", id||"");
+  set2("entrada-quantidade",""); set2("entrada-custo",""); set2("entrada-obs","");
+  openModal("modal-entrada-insumo");
+};
+
+window.salvarEntradaInsumo = async () => {
+  const insumoId = v("entrada-insumo-id");
+  const qtd      = parseFloat(v("entrada-quantidade"));
+  if (!insumoId || !qtd || qtd <= 0) { showToast("Preencha insumo e quantidade.", "error"); return; }
+  const insumo   = insumos.find(i => i.id === insumoId);
+  if (!insumo) return;
+  const custoUnit = parseFloat(v("entrada-custo")) || insumo.custo || 0;
+  try {
+    const batch = writeBatch(db);
+    batch.update(doc(db,"compartilhado","principal","insumos",insumoId), {
+      estoque: (insumo.estoque||0) + qtd,
+      atualizadoEm: serverTimestamp()
+    });
+    batch.set(doc(C.movimentacoes), {
+      tipo: "entrada_insumo",
+      insumoId, insumoNome: insumo.nome,
+      quantidade: qtd, unidade: insumo.unidade||"un",
+      custoUnitario: custoUnit,
+      custoTotal: custoUnit * qtd,
+      obs: v("entrada-obs"),
+      criadoPor: currentUser.email, criadoEm: serverTimestamp()
+    });
+    await batch.commit();
+    showToast(`Entrada registrada: +${fmt(qtd)} ${insumo.unidade||"un"} de ${insumo.nome}`, "success");
+    closeModal("modal-entrada-insumo");
+  } catch(e) { showToast("Erro: "+e.message, "error"); }
+};
+
+// =============================================
+// PRODUTOS
+// =============================================
+window.renderProdutos = () => {
+  const search = (document.getElementById("search-produtos")?.value || "").toLowerCase();
+  const fil    = produtos.filter(p => p.nome?.toLowerCase().includes(search));
+  const el     = document.getElementById("list-produtos");
+  if (!fil.length) { el.innerHTML = '<div class="empty-state">Nenhum produto</div>'; return; }
+  el.innerHTML = `<table>
+    <thead><tr><th>Nome</th><th>Categoria</th><th>Estoque</th><th>Preço</th><th>Tipo</th><th>Ações</th></tr></thead>
+    <tbody>${fil.map(p => {
+      const rec = receitas.find(r => r.produtoId === p.id);
+      const tags = [
+        p.usaEstoque ? '<span class="badge success">PE</span>' : '',
+        p.producaoSobDemanda ? '<span class="badge info">SD</span>' : '',
+        !rec ? '<span class="badge warn">sem receita</span>' : ''
+      ].join(" ");
       return `<tr>
         <td>${p.nome}</td>
         <td>${p.categoria||"—"}</td>
-        <td class="${baixo?"qty-low":"qty-ok"}">${p.quantidade||0}</td>
-        <td>${p.unidade||"un"}</td>
-        <td>${p.custo?"R$ "+Number(p.custo).toFixed(2):"—"}</td>
-        <td>${p.preco?"R$ "+Number(p.preco).toFixed(2):"—"}</td>
-        <td><div style="display:flex;gap:4px">
+        <td class="${p.usaEstoque?(p.estoque>0?"qty-ok":"qty-low"):"text-dim"}">${p.usaEstoque ? fmt(p.estoque||0)+" un" : "—"}</td>
+        <td>${p.preco ? "R$ "+Number(p.preco).toFixed(2) : "—"}</td>
+        <td><div style="display:flex;gap:3px;flex-wrap:wrap">${tags}</div></td>
+        <td><div style="display:flex;gap:4px;flex-wrap:wrap">
+          ${p.usaEstoque ? `<button class="btn-sm success" onclick="abrirVenderPE('${p.id}')">Vender</button>` : ""}
           <button class="btn-sm" onclick="editProduto('${p.id}')">Editar</button>
           <button class="btn-sm danger" onclick="deleteProduto('${p.id}')">✕</button>
         </div></td>
       </tr>`;
-    }).join("")}
-    </tbody>
+    }).join("")}</tbody>
   </table>`;
 };
 
-window.saveProduto = async function () {
-  const id   = document.getElementById("prod-id").value;
-  const nome = document.getElementById("prod-nome").value.trim();
-  if (!nome) { showToast("Informe o nome do produto.", "error"); return; }
+// Toggle visibilidade do campo estoque
+document.getElementById("produto-usa-estoque")?.addEventListener("change", function() {
+  document.getElementById("prod-estoque-field").style.display = this.checked ? "" : "none";
+});
+
+window.saveProduto = async () => {
+  const id   = v("produto-id");
+  const nome = v("produto-nome");
+  if (!nome) { showToast("Informe o nome.", "error"); return; }
+  const usaEstoque = document.getElementById("produto-usa-estoque").checked;
   const data = {
-    nome,
-    categoria:     document.getElementById("prod-categoria").value.trim(),
-    quantidade:    parseFloat(document.getElementById("prod-qtd").value) || 0,
-    unidade:       document.getElementById("prod-unidade").value.trim() || "un",
-    custo:         parseFloat(document.getElementById("prod-custo").value) || 0,
-    preco:         parseFloat(document.getElementById("prod-preco").value) || 0,
-    minimo:        parseFloat(document.getElementById("prod-minimo").value) || 0,
-    obs:           document.getElementById("prod-obs").value.trim(),
-    atualizadoPor: currentUser.email,
-    atualizadoEm:  serverTimestamp()
+    nome, categoria: v("produto-categoria"),
+    preco:           parseFloat(v("produto-preco")) || 0,
+    usaEstoque,
+    estoque:         usaEstoque ? (parseFloat(v("produto-estoque"))||0) : 0,
+    producaoSobDemanda: document.getElementById("produto-sob-demanda").checked,
+    obs:             v("produto-obs"),
+    atualizadoPor:   currentUser.email, atualizadoEm: serverTimestamp()
   };
   try {
     if (id) {
-      await updateDoc(doc(db, "compartilhado", "principal", "produtos", id), data);
+      await updateDoc(doc(db,"compartilhado","principal","produtos",id), data);
       showToast("Produto atualizado!", "success");
     } else {
-      data.criadoEm  = serverTimestamp();
-      data.criadoPor = currentUser.email;
-      await addDoc(COL_PRODUTOS, data);
+      data.criadoEm = serverTimestamp(); data.criadoPor = currentUser.email;
+      await addDoc(C.produtos, data);
       showToast("Produto cadastrado!", "success");
     }
-    closeModal("modal-produto"); clearFormProduto();
-  } catch (e) { showToast("Erro: " + e.message, "error"); }
+    closeModal("modal-produto"); clearProdutoForm();
+  } catch(e) { showToast("Erro: "+e.message, "error"); }
 };
 
-window.editProduto = function (id) {
-  const p = produtos.find(x => x.id === id);
-  if (!p) return;
-  document.getElementById("prod-id").value        = p.id;
-  document.getElementById("prod-nome").value      = p.nome || "";
-  document.getElementById("prod-categoria").value = p.categoria || "";
-  document.getElementById("prod-qtd").value       = p.quantidade || 0;
-  document.getElementById("prod-unidade").value   = p.unidade || "";
-  document.getElementById("prod-custo").value     = p.custo || "";
-  document.getElementById("prod-preco").value     = p.preco || "";
-  document.getElementById("prod-minimo").value    = p.minimo || "";
-  document.getElementById("prod-obs").value       = p.obs || "";
+window.editProduto = (id) => {
+  const p = produtos.find(x => x.id === id); if (!p) return;
+  set2("produto-id", p.id); set2("produto-nome", p.nome||"");
+  set2("produto-categoria", p.categoria||""); set2("produto-preco", p.preco||"");
+  document.getElementById("produto-usa-estoque").checked = !!p.usaEstoque;
+  document.getElementById("prod-estoque-field").style.display = p.usaEstoque ? "" : "none";
+  set2("produto-estoque", p.estoque||0);
+  document.getElementById("produto-sob-demanda").checked = !!p.producaoSobDemanda;
+  set2("produto-obs", p.obs||"");
   document.getElementById("modal-produto-title").textContent = "Editar Produto";
   openModal("modal-produto");
 };
 
-window.deleteProduto = async function (id) {
-  if (!confirm("Remover este produto?")) return;
-  try {
-    await deleteDoc(doc(db, "compartilhado", "principal", "produtos", id));
-    showToast("Produto removido.", "success");
-  } catch (e) { showToast("Erro ao remover.", "error"); }
+window.deleteProduto = async (id) => {
+  if (!confirm("Remover produto?")) return;
+  await deleteDoc(doc(db,"compartilhado","principal","produtos",id));
+  showToast("Produto removido.", "success");
 };
 
-function clearFormProduto() {
-  ["prod-id","prod-nome","prod-categoria","prod-qtd","prod-unidade",
-   "prod-custo","prod-preco","prod-minimo","prod-obs"].forEach(id => {
-    document.getElementById(id).value = "";
-  });
+function clearProdutoForm() {
+  ["produto-id","produto-nome","produto-categoria","produto-preco","produto-estoque","produto-obs"].forEach(id => set2(id,""));
+  document.getElementById("produto-usa-estoque").checked = true;
+  document.getElementById("produto-sob-demanda").checked = true;
+  document.getElementById("prod-estoque-field").style.display = "";
   document.getElementById("modal-produto-title").textContent = "Novo Produto";
 }
 
-// =============================================
-// VENDAS
-// =============================================
-window.filterVendas = function (filter, el) {
-  currentVendasFilter = filter;
-  document.querySelectorAll(".filter-tabs .tab").forEach(t => t.classList.remove("active"));
-  el.classList.add("active");
-  renderVendas();
+// Venda pronta entrega
+window.abrirVenderPE = (id) => {
+  const p = produtos.find(x => x.id === id); if (!p) return;
+  set2("vender-pe-produto-id", id);
+  set2("vender-pe-cliente",""); set2("vender-pe-qtd",1); set2("vender-pe-obs","");
+  document.getElementById("vender-pe-info").textContent =
+    `${p.nome} — Estoque atual: ${fmt(p.estoque||0)} un`;
+  openModal("modal-vender-pe");
 };
 
-function renderVendas() {
-  const list = document.getElementById("list-vendas");
-  let items;
-  if (currentVendasFilter === "pendente")       items = vendas;
-  else if (currentVendasFilter === "produzido") items = historico;
-  else {
-    items = [...vendas, ...historico];
-    items.sort((a, b) => tsToMs(b.criadoEm) - tsToMs(a.criadoEm));
-  }
-  if (!items.length) { list.innerHTML = '<div class="empty-state">Nenhuma venda encontrada</div>'; return; }
-  list.innerHTML = items.map(v => vendaCardHTML(v)).join("");
-}
-
-function vendaCardHTML(v) {
-  const itensStr  = (v.itens || []).map(i => `${i.qtd}x ${i.nome}`).join(", ");
-  const entrega   = v.entrega ? ` · Entrega: ${formatDate(v.entrega)}` : "";
-  const criadoPor = v.criadoPor ? ` · ${v.criadoPor}` : "";
-  const pago = v.pagStatus === "pago"
-    ? `<span class="badge success">Pago</span>`
-    : v.pagStatus === "parcial"
-    ? `<span class="badge warn">Parcial</span>`
-    : `<span class="badge danger">A pagar</span>`;
-  const status = v.status === "produzido"
-    ? `<span class="badge success">Produzido</span>`
-    : `<span class="badge warn">Pendente</span>`;
-  const actions = v.status === "pendente"
-    ? `<button class="btn-sm success" onclick="abrirConfirmProducao('${v.id}')">✓ Produzido</button>
-       <button class="btn-sm" onclick="editVenda('${v.id}')">Editar</button>
-       <button class="btn-sm danger" onclick="deleteVenda('${v.id}')">✕</button>`
-    : `<button class="btn-sm danger" onclick="deleteVenda('${v.id}')">Excluir</button>`;
-  return `<div class="venda-card ${v.status||"pendente"}">
-    <div class="venda-card-header">
-      <div class="venda-card-cliente">${v.cliente||"Sem nome"}</div>
-      <div style="display:flex;gap:4px;flex-wrap:wrap">${status} ${pago}</div>
-    </div>
-    <div class="venda-card-data">${formatDate(v.criadoEm)}${criadoPor}${entrega}</div>
-    <div class="venda-card-itens">${itensStr||"Sem itens"}</div>
-    ${v.obs?`<div class="venda-card-itens" style="font-style:italic;color:#5a5a6e">${v.obs}</div>`:""}
-    <div class="venda-card-footer">
-      <div class="venda-card-total">${formatMoney(v.total||0)}</div>
-      <div class="venda-card-actions">${actions}</div>
-    </div>
-  </div>`;
-}
-
-window.addItemVenda = function () {
-  const sel    = document.getElementById("venda-prod-select");
-  const prodId = sel.value;
-  const qtd    = parseFloat(document.getElementById("venda-item-qtd").value) || 1;
-  if (!prodId) { showToast("Selecione um produto.", "error"); return; }
-  const prod = produtos.find(p => p.id === prodId);
-  if (!prod) return;
-  const idx = vendaItensTemp.findIndex(i => i.prodId === prodId);
-  if (idx >= 0) vendaItensTemp[idx].qtd += qtd;
-  else vendaItensTemp.push({ prodId, nome: prod.nome, qtd, preco: prod.preco || 0 });
-  sel.value = "";
-  document.getElementById("venda-item-qtd").value = 1;
-  renderVendaItens();
-};
-
-function renderVendaItens() {
-  const list = document.getElementById("venda-itens-list");
-  if (!vendaItensTemp.length) {
-    list.innerHTML = '<div style="color:var(--text-dim);font-size:0.78rem;padding:0.5rem 0">Nenhum item adicionado</div>';
-    document.getElementById("venda-total-display").textContent = "R$ 0,00";
-    return;
-  }
-  list.innerHTML = vendaItensTemp.map((item, i) => `
-    <div class="item-row">
-      <span class="item-row-name">${item.nome}</span>
-      <span class="item-row-qty">${item.qtd}x</span>
-      <span class="item-row-price">${formatMoney((item.qtd*item.preco)||0)}</span>
-      <button class="item-remove" onclick="removeItemVenda(${i})">✕</button>
-    </div>`).join("");
-  const total = vendaItensTemp.reduce((s, i) => s + (i.qtd*i.preco), 0);
-  document.getElementById("venda-total-display").textContent = formatMoney(total);
-}
-
-window.removeItemVenda = function (i) { vendaItensTemp.splice(i, 1); renderVendaItens(); };
-
-window.saveVenda = async function () {
-  const id      = document.getElementById("venda-id").value;
-  const cliente = document.getElementById("venda-cliente").value.trim();
-  if (!cliente)               { showToast("Informe o cliente.", "error"); return; }
-  if (!vendaItensTemp.length) { showToast("Adicione ao menos um item.", "error"); return; }
-  const total = vendaItensTemp.reduce((s, i) => s + (i.qtd*i.preco), 0);
-  const data = {
-    cliente,
-    contato:       document.getElementById("venda-contato").value.trim(),
-    data:          document.getElementById("venda-data").value,
-    entrega:       document.getElementById("venda-entrega").value,
-    itens:         vendaItensTemp.map(i => ({ prodId:i.prodId, nome:i.nome, qtd:i.qtd, preco:i.preco })),
-    total,
-    pagamento:     document.getElementById("venda-pagamento").value,
-    pagStatus:     document.getElementById("venda-pag-status").value,
-    obs:           document.getElementById("venda-obs").value.trim(),
-    status:        "pendente",
-    atualizadoPor: currentUser.email,
-    atualizadoEm:  serverTimestamp()
-  };
-  try {
-    if (id) {
-      await updateDoc(doc(db, "compartilhado", "principal", "vendas", id), data);
-      showToast("Venda atualizada!", "success");
-    } else {
-      data.criadoEm  = serverTimestamp();
-      data.criadoPor = currentUser.email;
-      await addDoc(COL_VENDAS, data);
-      showToast("Venda cadastrada!", "success");
-    }
-    closeModal("modal-venda"); clearFormVenda();
-  } catch (e) { showToast("Erro: " + e.message, "error"); }
-};
-
-window.editVenda = function (id) {
-  const v = vendas.find(x => x.id === id);
-  if (!v) return;
-  document.getElementById("venda-id").value         = v.id;
-  document.getElementById("venda-cliente").value    = v.cliente || "";
-  document.getElementById("venda-contato").value    = v.contato || "";
-  document.getElementById("venda-data").value       = v.data || "";
-  document.getElementById("venda-entrega").value    = v.entrega || "";
-  document.getElementById("venda-pagamento").value  = v.pagamento || "";
-  document.getElementById("venda-pag-status").value = v.pagStatus || "pendente";
-  document.getElementById("venda-obs").value        = v.obs || "";
-  vendaItensTemp = (v.itens || []).map(i => ({ ...i }));
-  renderVendaItens();
-  document.getElementById("modal-venda-title").textContent = "Editar Venda";
-  openModal("modal-venda");
-};
-
-window.deleteVenda = async function (id) {
-  if (!confirm("Excluir esta venda?")) return;
-  try {
-    await deleteDoc(doc(db, "compartilhado", "principal", "vendas", id));
-    showToast("Venda excluída.", "success");
-  } catch (e) { showToast("Erro ao excluir.", "error"); }
-};
-
-function clearFormVenda() {
-  document.getElementById("venda-id").value = "";
-  ["venda-cliente","venda-contato","venda-data","venda-entrega","venda-obs"]
-    .forEach(id => { document.getElementById(id).value = ""; });
-  document.getElementById("venda-pagamento").value  = "";
-  document.getElementById("venda-pag-status").value = "pendente";
-  vendaItensTemp = [];
-  renderVendaItens();
-  document.getElementById("modal-venda-title").textContent = "Nova Venda";
-}
-
-// =============================================
-// PRODUÇÃO
-// =============================================
-function renderProducao() {
-  const list = document.getElementById("list-producao");
-  if (!vendas.length) { list.innerHTML = '<div class="empty-state">Nada para produzir agora 🎉</div>'; return; }
-  list.innerHTML = vendas.map(v => {
-    const itensStr  = (v.itens||[]).map(i => `<strong>${i.qtd}x</strong> ${i.nome}`).join(", ");
-    const entrega   = v.entrega ? `<span class="badge warn">Entrega: ${formatDate(v.entrega)}</span>` : "";
-    const criadoPor = v.criadoPor ? `<span class="badge neutral">por ${v.criadoPor}</span>` : "";
-    return `<div class="venda-card pendente">
-      <div class="venda-card-header">
-        <div class="venda-card-cliente">${v.cliente}</div>
-        <div style="display:flex;gap:4px;flex-wrap:wrap">${entrega}${criadoPor}</div>
-      </div>
-      <div class="venda-card-itens" style="margin-bottom:0.5rem">${itensStr}</div>
-      ${v.obs?`<div class="venda-card-itens" style="font-style:italic;color:#5a5a6e;margin-bottom:0.4rem">${v.obs}</div>`:""}
-      <div class="venda-card-footer">
-        <div class="venda-card-total">${formatMoney(v.total||0)}</div>
-        <button class="btn-primary" style="padding:0.5rem 1rem;font-size:0.8rem" onclick="abrirConfirmProducao('${v.id}')">✓ Marcar como Produzido</button>
-      </div>
-    </div>`;
-  }).join("");
-}
-
-window.abrirConfirmProducao = function (id) {
-  const v = vendas.find(x => x.id === id);
-  if (!v) return;
-  pendingVendaId = id;
-  const itensStr = (v.itens||[]).map(i => `${i.qtd}x ${i.nome}`).join(", ");
-  document.getElementById("prod-confirm-text").textContent =
-    `Confirmar que o pedido de "${v.cliente}" foi produzido?\n\nItens: ${itensStr}`;
-
-  // Aviso de estoque
-  const avisoEl = document.getElementById("prod-estoque-aviso");
-  const avisos = [];
-  (v.itens||[]).forEach(item => {
-    const prod = produtos.find(p => p.id === item.prodId);
-    if (!prod) { avisos.push(`⚠️ ${item.nome}: produto não encontrado`); return; }
-    const apos = (Number(prod.quantidade)||0) - item.qtd;
-    if (apos < 0) avisos.push(`⚠️ ${item.nome}: estoque insuficiente (tem ${prod.quantidade||0}, precisa ${item.qtd})`);
-    else avisos.push(`✓ ${item.nome}: ${prod.quantidade||0} → ${apos} ${prod.unidade||"un"}`);
-  });
-  avisoEl.innerHTML = avisos.length
-    ? `<div class="info-box">${avisos.map(a => `<div>${a}</div>`).join("")}</div>` : "";
-
-  document.getElementById("prod-confirm-obs").value = "";
-  openModal("modal-producao");
-};
-
-window.confirmarProducao = async function () {
-  if (!pendingVendaId) return;
-  const venda = vendas.find(x => x.id === pendingVendaId);
-  if (!venda) return;
-  const obs = document.getElementById("prod-confirm-obs").value.trim();
-
+window.confirmarVendaPE = async () => {
+  const id  = v("vender-pe-produto-id");
+  const qtd = parseInt(v("vender-pe-qtd")) || 0;
+  const p   = produtos.find(x => x.id === id);
+  if (!p || qtd <= 0) { showToast("Dados inválidos.", "error"); return; }
+  if ((p.estoque||0) < qtd) { showToast(`Estoque insuficiente: ${fmt(p.estoque||0)} un disponíveis.`, "error"); return; }
   try {
     const batch = writeBatch(db);
-
-    // 1. Marca a venda como produzida
-    batch.update(doc(db, "compartilhado", "principal", "vendas", pendingVendaId), {
-      status:       "produzido",
-      produzidoEm:  serverTimestamp(),
-      produzidoPor: currentUser.email,
-      obsProducao:  obs
+    batch.update(doc(db,"compartilhado","principal","produtos",id), {
+      estoque: (p.estoque||0) - qtd,
+      atualizadoEm: serverTimestamp()
     });
-
-    // 2. Desconta do estoque para cada item
-    for (const item of (venda.itens || [])) {
-      const prod = produtos.find(p => p.id === item.prodId);
-      if (!prod) continue;
-      const novaQtd = Math.max(0, (Number(prod.quantidade)||0) - item.qtd);
-      batch.update(doc(db, "compartilhado", "principal", "produtos", item.prodId), {
-        quantidade:    novaQtd,
-        atualizadoPor: currentUser.email,
-        atualizadoEm:  serverTimestamp()
-      });
-    }
-
+    batch.set(doc(C.movimentacoes), {
+      tipo: "venda",
+      produtoId: id, produtoNome: p.nome,
+      quantidade: qtd,
+      cliente: v("vender-pe-cliente"),
+      obs: v("vender-pe-obs"),
+      totalVenda: (p.preco||0) * qtd,
+      criadoPor: currentUser.email, criadoEm: serverTimestamp()
+    });
     await batch.commit();
-    showToast("Produzido! Estoque atualizado ✓", "success");
-    closeModal("modal-producao");
-    pendingVendaId = null;
-  } catch (e) {
-    showToast("Erro: " + e.message, "error");
-  }
+    showToast(`Venda registrada! -${qtd} un de ${p.nome}`, "success");
+    closeModal("modal-vender-pe");
+  } catch(e) { showToast("Erro: "+e.message, "error"); }
 };
 
 // =============================================
-// HISTÓRICO
+// RECEITAS (BOM)
 // =============================================
-window.renderHistorico = function () {
-  const from = document.getElementById("hist-from")?.value;
-  const to   = document.getElementById("hist-to")?.value;
-  let items  = [...historico];
-  if (from) {
-    const fromDate = new Date(from + "T00:00:00");
-    items = items.filter(v => {
-      const d = v.produzidoEm?.toDate ? v.produzidoEm.toDate() : new Date(v.produzidoEm||0);
-      return d >= fromDate;
-    });
-  }
-  if (to) {
-    const toDate = new Date(to + "T23:59:59");
-    items = items.filter(v => {
-      const d = v.produzidoEm?.toDate ? v.produzidoEm.toDate() : new Date(v.produzidoEm||0);
-      return d <= toDate;
-    });
-  }
-  const list = document.getElementById("list-historico");
-  if (!items.length) { list.innerHTML = '<div class="empty-state">Nenhum item encontrado</div>'; return; }
-  const total  = items.reduce((s, v) => s + (v.total||0), 0);
-  const header = `<div style="margin-bottom:0.75rem;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.5rem">
-    <span style="color:var(--text-muted);font-size:0.8rem">${items.length} pedidos produzidos</span>
-    <span style="font-family:var(--font-head);font-size:1.1rem;font-weight:700;color:var(--accent)">${formatMoney(total)} total</span>
-  </div>`;
-  list.innerHTML = header + items.map(v => {
-    const itensStr     = (v.itens||[]).map(i => `${i.qtd}x ${i.nome}`).join(", ");
-    const prodEm       = v.produzidoEm?.toDate ? formatDate(v.produzidoEm) : "—";
-    const produzidoPor = v.produzidoPor ? ` · ${v.produzidoPor}` : "";
-    return `<div class="venda-card produzido">
-      <div class="venda-card-header">
-        <div class="venda-card-cliente">${v.cliente}</div>
-        <span class="badge success">Produzido em ${prodEm}${produzidoPor}</span>
-      </div>
-      <div class="venda-card-itens">${itensStr}</div>
-      ${v.obsProducao?`<div class="venda-card-itens" style="font-style:italic;color:#5a5a6e">Obs: ${v.obsProducao}</div>`:""}
-      <div class="venda-card-footer">
-        <div class="venda-card-total">${formatMoney(v.total||0)}</div>
-        <div style="display:flex;gap:4px;align-items:center">
-          <span class="badge ${v.pagStatus==="pago"?"success":"warn"}">${v.pagStatus||"pendente"}</span>
-          <button class="btn-sm danger" onclick="deleteVenda('${v.id}')">✕</button>
+window.renderReceitas = () => {
+  const el = document.getElementById("list-receitas");
+  if (!receitas.length) { el.innerHTML = '<div class="empty-state">Nenhuma receita cadastrada</div>'; return; }
+  el.innerHTML = receitas.map(r => {
+    const prod = produtos.find(p => p.id === r.produtoId);
+    const mats = (r.materiais||[]).map(m => {
+      const ins = insumos.find(i => i.id === m.insumoId);
+      return ins ? `<span class="mat-tag">${fmt(m.quantidade)} ${ins.unidade||"un"} ${ins.nome}</span>` : "";
+    }).join("");
+    const custo = calcCustoReceita(r);
+    return `<div class="receita-card">
+      <div class="receita-header">
+        <div>
+          <div class="receita-produto">${prod?.nome || "Produto removido"}</div>
+          <div class="receita-mats">${mats || "Sem materiais"}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:0.4rem">
+          ${custo > 0 ? `<span class="badge neutral">Custo: R$ ${custo.toFixed(2)}/un</span>` : ""}
+          <div style="display:flex;gap:4px">
+            <button class="btn-sm" onclick="editReceita('${r.id}')">Editar</button>
+            <button class="btn-sm danger" onclick="deleteReceita('${r.id}')">✕</button>
+          </div>
         </div>
       </div>
     </div>`;
   }).join("");
 };
 
-window.clearHistFilter = function () {
-  document.getElementById("hist-from").value = "";
-  document.getElementById("hist-to").value   = "";
-  renderHistorico();
+function calcCustoReceita(receita) {
+  return (receita.materiais||[]).reduce((sum, m) => {
+    const ins = insumos.find(i => i.id === m.insumoId);
+    return sum + (ins?.custo||0) * m.quantidade;
+  }, 0);
+}
+
+// Materiais temp
+window.addMaterialReceita = () => {
+  const insumoId = v("receita-insumo-sel");
+  const qtd      = parseFloat(v("receita-insumo-qtd")) || 0;
+  if (!insumoId || qtd <= 0) { showToast("Selecione insumo e quantidade.", "error"); return; }
+  const idx = receitaMateriais.findIndex(m => m.insumoId === insumoId);
+  if (idx >= 0) receitaMateriais[idx].quantidade = qtd;
+  else receitaMateriais.push({ insumoId, quantidade: qtd });
+  set2("receita-insumo-sel",""); set2("receita-insumo-qtd",1);
+  renderMateriaisReceita();
+};
+
+window.removeMaterialReceita = (idx) => {
+  receitaMateriais.splice(idx, 1);
+  renderMateriaisReceita();
+};
+
+function renderMateriaisReceita() {
+  const el = document.getElementById("receita-materiais-list");
+  if (!receitaMateriais.length) {
+    el.innerHTML = '<div style="color:var(--text-dim);font-size:0.78rem;padding:0.5rem 0">Nenhum material</div>';
+    document.getElementById("receita-custo-estimado").innerHTML = "";
+    return;
+  }
+  el.innerHTML = receitaMateriais.map((m, i) => {
+    const ins = insumos.find(x => x.id === m.insumoId);
+    return `<div class="item-row">
+      <span class="item-row-name">${ins?.nome||"?"}</span>
+      <span class="item-row-qty">${fmt(m.quantidade)} ${ins?.unidade||"un"}</span>
+      <span class="item-row-price">${ins?.custo ? "R$ "+(ins.custo*m.quantidade).toFixed(2) : "—"}</span>
+      <button class="item-remove" onclick="removeMaterialReceita(${i})">✕</button>
+    </div>`;
+  }).join("");
+  const custoTotal = receitaMateriais.reduce((s, m) => {
+    const ins = insumos.find(x => x.id === m.insumoId);
+    return s + (ins?.custo||0) * m.quantidade;
+  }, 0);
+  document.getElementById("receita-custo-estimado").innerHTML = custoTotal > 0
+    ? `<div class="custo-estimado">Custo estimado por unidade: <strong>R$ ${custoTotal.toFixed(2)}</strong></div>` : "";
+}
+
+window.saveReceita = async () => {
+  const id        = v("receita-id");
+  const produtoId = v("receita-produto-id");
+  if (!produtoId)             { showToast("Selecione o produto.", "error"); return; }
+  if (!receitaMateriais.length) { showToast("Adicione ao menos um material.", "error"); return; }
+  const data = {
+    produtoId,
+    materiais: receitaMateriais.map(m => ({ insumoId: m.insumoId, quantidade: m.quantidade })),
+    atualizadoPor: currentUser.email, atualizadoEm: serverTimestamp()
+  };
+  try {
+    if (id) {
+      await updateDoc(doc(db,"compartilhado","principal","receitas",id), data);
+      showToast("Receita atualizada!", "success");
+    } else {
+      data.criadoEm = serverTimestamp(); data.criadoPor = currentUser.email;
+      await addDoc(C.receitas, data);
+      showToast("Receita criada!", "success");
+    }
+    closeModal("modal-receita");
+  } catch(e) { showToast("Erro: "+e.message, "error"); }
+};
+
+window.editReceita = (id) => {
+  const r = receitas.find(x => x.id === id); if (!r) return;
+  set2("receita-id", r.id);
+  populateSelect("receita-produto-id", produtos, "Selecionar produto...");
+  set2("receita-produto-id", r.produtoId||"");
+  populateSelect("receita-insumo-sel", insumos, "Selecionar insumo...");
+  receitaMateriais = (r.materiais||[]).map(m => ({ ...m }));
+  renderMateriaisReceita();
+  document.getElementById("modal-receita-title").textContent = "Editar Receita";
+  openModal("modal-receita");
+};
+
+window.deleteReceita = async (id) => {
+  if (!confirm("Remover receita?")) return;
+  await deleteDoc(doc(db,"compartilhado","principal","receitas",id));
+  showToast("Receita removida.", "success");
+};
+
+// =============================================
+// PEDIDOS
+// =============================================
+window.filterPedidos = (filtro, el) => {
+  pedidosFiltro = filtro;
+  document.querySelectorAll(".filter-tabs .tab").forEach(t => t.classList.remove("active"));
+  el.classList.add("active");
+  renderPedidos();
+};
+
+function renderPedidos() {
+  const el    = document.getElementById("list-pedidos");
+  let items   = pedidosFiltro === "pendente" ? pedidos.filter(p => p.status==="pendente")
+              : pedidosFiltro === "produzido" ? pedidos.filter(p => p.status==="produzido")
+              : pedidos;
+  if (!items.length) { el.innerHTML = '<div class="empty-state">Nenhum pedido</div>'; return; }
+  el.innerHTML = items.map(p => pedidoCardHTML(p)).join("");
+}
+
+function pedidoCardHTML(p) {
+  const prod   = produtos.find(x => x.id === p.produtoId);
+  const status = p.status === "produzido"
+    ? '<span class="badge success">Produzido</span>'
+    : '<span class="badge warn">Pendente</span>';
+  const pag = p.pagStatus === "pago" ? '<span class="badge success">Pago</span>'
+    : p.pagStatus === "parcial" ? '<span class="badge warn">Parcial</span>'
+    : '<span class="badge danger">A pagar</span>';
+  const actions = p.status === "pendente"
+    ? `<button class="btn-sm success" onclick="abrirConfirmarProducaoPedido('${p.id}')">⚙ Produzir</button>
+       <button class="btn-sm danger" onclick="deletePedido('${p.id}')">✕</button>`
+    : `<button class="btn-sm danger" onclick="deletePedido('${p.id}')">✕</button>`;
+  return `<div class="venda-card ${p.status||"pendente"}">
+    <div class="venda-card-header">
+      <div class="venda-card-cliente">${p.cliente||"Sem cliente"} — <span style="color:var(--text-muted)">${prod?.nome||"?"}</span></div>
+      <div style="display:flex;gap:4px;flex-wrap:wrap">${status} ${pag}</div>
+    </div>
+    <div class="venda-card-data">${formatDate(p.criadoEm)}${p.entrega ? " · Entrega: "+formatDate(p.entrega) : ""}${p.criadoPor?" · "+p.criadoPor:""}</div>
+    ${p.obs?`<div class="venda-card-itens" style="font-style:italic">${p.obs}</div>`:""}
+    <div class="venda-card-footer">
+      <div class="venda-card-total"><span style="color:var(--text-muted);font-size:0.8rem">Qtd: </span>${p.quantidade||1} un ${p.totalEstimado?` · R$ ${Number(p.totalEstimado).toFixed(2)}`:""}</div>
+      <div class="venda-card-actions">${actions}</div>
+    </div>
+  </div>`;
+}
+
+window.onPedidoProdutoChange = () => {
+  const id   = v("pedido-produto-id");
+  const prod = produtos.find(p => p.id === id);
+  const info = document.getElementById("pedido-tipo-info");
+  if (!prod) { info.style.display = "none"; return; }
+  const tags = [];
+  if (prod.usaEstoque) tags.push(`✓ Pronta Entrega — Estoque: ${fmt(prod.estoque||0)} un`);
+  if (prod.producaoSobDemanda) tags.push("✓ Aceita produção sob demanda");
+  const rec = receitas.find(r => r.produtoId === id);
+  if (!rec) tags.push("⚠️ Sem receita cadastrada — produção não será possível");
+  info.innerHTML = tags.map(t => `<div>${t}</div>`).join("");
+  info.style.display = "";
+  calcPedidoTotal();
+};
+
+window.calcPedidoTotal = () => {
+  const id   = v("pedido-produto-id");
+  const qtd  = parseInt(v("pedido-quantidade")) || 1;
+  const prod = produtos.find(p => p.id === id);
+  const row  = document.getElementById("pedido-total-row");
+  if (prod?.preco) {
+    document.getElementById("pedido-total-display").textContent = "R$ "+(prod.preco*qtd).toFixed(2);
+    row.style.display = "";
+  } else {
+    row.style.display = "none";
+  }
+};
+
+window.savePedido = async () => {
+  const cliente   = v("pedido-cliente");
+  const produtoId = v("pedido-produto-id");
+  const qtd       = parseInt(v("pedido-quantidade")) || 1;
+  if (!cliente || !produtoId) { showToast("Preencha cliente e produto.", "error"); return; }
+  const prod = produtos.find(p => p.id === produtoId);
+  if (!prod) return;
+  const data = {
+    cliente, produtoId, produtoNome: prod.nome,
+    quantidade: qtd,
+    entrega:    v("pedido-entrega"),
+    pagamento:  v("pedido-pagamento"),
+    pagStatus:  v("pedido-pag-status") || "pendente",
+    obs:        v("pedido-obs"),
+    totalEstimado: (prod.preco||0)*qtd,
+    status:     "pendente",
+    tipo:       prod.usaEstoque && (prod.estoque||0) >= qtd ? "pronta_entrega" : "producao",
+    criadoPor:  currentUser.email, criadoEm: serverTimestamp()
+  };
+  try {
+    await addDoc(C.pedidos, data);
+    showToast("Pedido criado!", "success");
+    closeModal("modal-pedido"); clearPedidoForm();
+  } catch(e) { showToast("Erro: "+e.message, "error"); }
+};
+
+window.deletePedido = async (id) => {
+  if (!confirm("Excluir pedido?")) return;
+  await deleteDoc(doc(db,"compartilhado","principal","pedidos",id));
+  showToast("Pedido excluído.", "success");
+};
+
+function clearPedidoForm() {
+  ["pedido-cliente","pedido-produto-id","pedido-quantidade","pedido-entrega",
+   "pedido-pagamento","pedido-obs"].forEach(id => set2(id,""));
+  set2("pedido-pag-status","pendente"); set2("pedido-quantidade",1);
+  document.getElementById("pedido-tipo-info").style.display = "none";
+  document.getElementById("pedido-total-row").style.display = "none";
+}
+
+// =============================================
+// PRODUÇÃO
+// =============================================
+function renderProducao() {
+  const el   = document.getElementById("list-producao-pedidos");
+  const pend = pedidos.filter(p => p.status === "pendente");
+  if (!pend.length) { el.innerHTML = '<div class="empty-state">Nenhum pedido pendente 🎉</div>'; return; }
+  el.innerHTML = pend.map(p => {
+    const prod = produtos.find(x => x.id === p.produtoId);
+    const rec  = receitas.find(r => r.produtoId === p.produtoId);
+    const semReceita = !rec ? `<span class="badge danger">Sem receita</span>` : "";
+    return `<div class="venda-card pendente">
+      <div class="venda-card-header">
+        <div class="venda-card-cliente">${p.cliente} — ${prod?.nome||"?"} × ${p.quantidade}</div>
+        ${semReceita}
+      </div>
+      ${p.entrega?`<div class="venda-card-data">Entrega: ${formatDate(p.entrega)}</div>`:""}
+      ${p.obs?`<div class="venda-card-itens" style="font-style:italic">${p.obs}</div>`:""}
+      <div class="venda-card-footer">
+        <div class="venda-card-total">${p.totalEstimado?"R$ "+Number(p.totalEstimado).toFixed(2):""}</div>
+        <button class="btn-primary" style="padding:0.5rem 1rem;font-size:0.8rem" onclick="abrirConfirmarProducaoPedido('${p.id}')">⚙ Produzir</button>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+window.abrirConfirmarProducaoPedido = (id) => {
+  const pedido = pedidos.find(x => x.id === id); if (!pedido) return;
+  pendingPedidoId = id;
+  const prod = produtos.find(x => x.id === pedido.produtoId);
+  const rec  = receitas.find(r => r.produtoId === pedido.produtoId);
+  document.getElementById("conf-prod-texto").textContent =
+    `Produzir ${pedido.quantidade}x "${prod?.nome||"?"}" para ${pedido.cliente}.`;
+  const preview = document.getElementById("conf-prod-preview");
+  if (rec) {
+    const linhas = (rec.materiais||[]).map(m => {
+      const ins    = insumos.find(i => i.id === m.insumoId);
+      const consume = m.quantidade * pedido.quantidade;
+      const apos   = (ins?.estoque||0) - consume;
+      const ok     = apos >= 0;
+      return `<div style="color:${ok?"var(--success)":"var(--danger)"}">
+        ${ok?"✓":"✕"} ${ins?.nome||"?"}: ${fmt(ins?.estoque||0)} → ${fmt(apos)} ${ins?.unidade||"un"}
+        ${!ok?" ⚠️ INSUFICIENTE":""}
+      </div>`;
+    }).join("");
+    preview.innerHTML = linhas;
+    preview.style.display = "";
+  } else {
+    preview.innerHTML = '<div style="color:var(--danger)">⚠️ Nenhuma receita cadastrada para este produto.</div>';
+    preview.style.display = "";
+  }
+  set2("conf-prod-obs","");
+  openModal("modal-confirmar-producao");
+};
+
+window.finalizarPedidoConfirmado = async () => {
+  if (!pendingPedidoId) return;
+  const pedido = pedidos.find(x => x.id === pendingPedidoId); if (!pedido) return;
+  const obs    = v("conf-prod-obs");
+  try {
+    await produzirProduto(pedido.produtoId, pedido.quantidade, obs, pendingPedidoId);
+    closeModal("modal-confirmar-producao");
+    pendingPedidoId = null;
+  } catch(e) { showToast("Erro: "+e.message, "error"); }
+};
+
+// Preview produção livre
+window.calcProducaoPreview = () => {
+  const produtoId = v("prod-livre-produto");
+  const qtd       = parseInt(v("prod-livre-qtd")) || 1;
+  const preview   = document.getElementById("prod-livre-preview");
+  if (!produtoId) { preview.style.display = "none"; return; }
+  const rec = receitas.find(r => r.produtoId === produtoId);
+  if (!rec) {
+    preview.innerHTML = '<div style="color:var(--danger)">⚠️ Sem receita cadastrada para este produto.</div>';
+    preview.style.display = ""; return;
+  }
+  const linhas = (rec.materiais||[]).map(m => {
+    const ins    = insumos.find(i => i.id === m.insumoId);
+    const consume = m.quantidade * qtd;
+    const apos   = (ins?.estoque||0) - consume;
+    const ok     = apos >= 0;
+    return `<div style="color:${ok?"var(--success)":"var(--danger)"}">
+      ${ok?"✓":"✕"} ${ins?.nome||"?"}: ${fmt(ins?.estoque||0)} → ${fmt(apos)} ${ins?.unidade||"un"}
+      ${!ok?" ⚠️ INSUFICIENTE":""}
+    </div>`;
+  }).join("");
+  preview.innerHTML = linhas;
+  preview.style.display = "";
+};
+
+window.produzirLivre = async () => {
+  const produtoId = v("prod-livre-produto");
+  const qtd       = parseInt(v("prod-livre-qtd")) || 1;
+  if (!produtoId || qtd <= 0) { showToast("Preencha produto e quantidade.", "error"); return; }
+  try {
+    await produzirProduto(produtoId, qtd, "", null);
+    closeModal("modal-produzir-livre");
+  } catch(e) { showToast("Erro: "+e.message, "error"); }
+};
+
+// =============================================
+// FUNÇÃO CENTRAL: PRODUZIR PRODUTO
+// =============================================
+async function produzirProduto(produtoId, quantidade, obs, pedidoId) {
+  const prod = produtos.find(p => p.id === produtoId);
+  if (!prod) throw new Error("Produto não encontrado.");
+  const rec = receitas.find(r => r.produtoId === produtoId);
+  if (!rec)  throw new Error("Receita não encontrada para este produto. Cadastre a receita antes de produzir.");
+
+  // Validar insumos
+  const consumos = [];
+  for (const mat of rec.materiais||[]) {
+    const ins     = insumos.find(i => i.id === mat.insumoId);
+    if (!ins)     throw new Error(`Insumo não encontrado: ${mat.insumoId}`);
+    const consume = mat.quantidade * quantidade;
+    if ((ins.estoque||0) < consume) {
+      throw new Error(`Estoque insuficiente de "${ins.nome}": tem ${fmt(ins.estoque||0)} ${ins.unidade||""}, precisa ${fmt(consume)} ${ins.unidade||""}.`);
+    }
+    consumos.push({ insumoId: ins.id, insumoNome: ins.nome, delta: -consume, unidade: ins.unidade||"un" });
+  }
+
+  // Tudo ok — batch de escrita
+  const batch = writeBatch(db);
+
+  // 1. Descontar insumos
+  for (const c of consumos) {
+    const ins = insumos.find(i => i.id === c.insumoId);
+    batch.update(doc(db,"compartilhado","principal","insumos", c.insumoId), {
+      estoque: (ins.estoque||0) + c.delta,  // delta é negativo
+      atualizadoEm: serverTimestamp()
+    });
+  }
+
+  // 2. Incrementar estoque do produto (se usaEstoque)
+  if (prod.usaEstoque) {
+    batch.update(doc(db,"compartilhado","principal","produtos", produtoId), {
+      estoque: (prod.estoque||0) + quantidade,
+      atualizadoEm: serverTimestamp()
+    });
+  }
+
+  // 3. Atualizar pedido para "produzido" (se houver)
+  if (pedidoId) {
+    batch.update(doc(db,"compartilhado","principal","pedidos", pedidoId), {
+      status: "produzido",
+      produzidoEm: serverTimestamp(),
+      produzidoPor: currentUser.email,
+      obsProducao: obs
+    });
+  }
+
+  // 4. Registrar movimentação
+  batch.set(doc(C.movimentacoes), {
+    tipo: "producao",
+    produtoId, produtoNome: prod.nome,
+    quantidade,
+    pedidoId: pedidoId||null,
+    insumos: consumos,
+    obs,
+    criadoPor: currentUser.email, criadoEm: serverTimestamp()
+  });
+
+  await batch.commit();
+  showToast(`Produção concluída! ${quantidade}x ${prod.nome}. Estoque de insumos atualizado. ✓`, "success");
+}
+
+// =============================================
+// MOVIMENTAÇÕES
+// =============================================
+window.renderMovimentacoes = () => {
+  const tipo = v("mov-tipo-filter");
+  const from = v("mov-from");
+  const to   = v("mov-to");
+  let items  = [...movimentacoes];
+  if (tipo) items = items.filter(m => m.tipo === tipo);
+  if (from) items = items.filter(m => {
+    const d = m.criadoEm?.toDate ? m.criadoEm.toDate() : new Date(m.criadoEm||0);
+    return d >= new Date(from+"T00:00:00");
+  });
+  if (to) items = items.filter(m => {
+    const d = m.criadoEm?.toDate ? m.criadoEm.toDate() : new Date(m.criadoEm||0);
+    return d <= new Date(to+"T23:59:59");
+  });
+
+  const el = document.getElementById("list-movimentacoes");
+  if (!items.length) { el.innerHTML = '<div class="empty-state">Nenhuma movimentação</div>'; return; }
+  el.innerHTML = items.map(m => {
+    const tipoLabel = {
+      "entrada_insumo": "Entrada de Insumo",
+      "producao":       "Produção",
+      "venda":          "Venda",
+      "ajuste_manual":  "Ajuste Manual"
+    }[m.tipo] || m.tipo;
+    const tipoClass = { "entrada_insumo":"info", "producao":"success", "venda":"warn", "ajuste_manual":"neutral" }[m.tipo]||"neutral";
+    let detalhe = "";
+    if (m.tipo === "producao")      detalhe = `${m.quantidade}x ${m.produtoNome||""} ${m.pedidoId?"(pedido)":"(livre)"}`;
+    else if (m.tipo === "venda")    detalhe = `${m.quantidade}x ${m.produtoNome||""} ${m.cliente?"→ "+m.cliente:""}`;
+    else if (m.tipo === "entrada_insumo") detalhe = `+${fmt(m.quantidade)} ${m.unidade||""} ${m.insumoNome||""}`;
+    return `<div class="venda-card ${m.tipo==="producao"?"produzido":"pendente"}">
+      <div class="venda-card-header">
+        <div class="venda-card-cliente">${detalhe}</div>
+        <span class="badge ${tipoClass}">${tipoLabel}</span>
+      </div>
+      <div class="venda-card-data">${formatDate(m.criadoEm)} · ${m.criadoPor||""}</div>
+      ${m.obs?`<div class="venda-card-itens" style="font-style:italic">${m.obs}</div>`:""}
+      ${m.tipo==="producao" && m.insumos?.length ? `<div class="venda-card-itens">${m.insumos.map(i=>`${fmt(Math.abs(i.delta))} ${i.unidade} ${i.insumoNome}`).join(" · ")}</div>` : ""}
+    </div>`;
+  }).join("");
+};
+
+window.clearMovFilter = () => {
+  set2("mov-tipo-filter",""); set2("mov-from",""); set2("mov-to","");
+  renderMovimentacoes();
 };
 
 // =============================================
 // MODAIS
 // =============================================
-window.openModal = function (id) {
-  if (id === "modal-venda") populateProdutoSelect();
+window.openModal = (id) => {
+  if (id === "modal-receita") {
+    populateSelect("receita-produto-id", produtos, "Selecionar produto...");
+    populateSelect("receita-insumo-sel", insumos,  "Selecionar insumo...");
+    if (!v("receita-id")) { receitaMateriais = []; renderMateriaisReceita(); }
+    document.getElementById("modal-receita-title").textContent = "Nova Receita";
+  }
+  if (id === "modal-pedido") {
+    populateSelect("pedido-produto-id", produtos.filter(p => p.usaEstoque || p.producaoSobDemanda), "Selecionar produto...");
+  }
+  if (id === "modal-produzir-livre") {
+    populateSelect("prod-livre-produto", produtos.filter(p => receitas.find(r => r.produtoId === p.id)), "Selecionar produto...");
+    document.getElementById("prod-livre-preview").style.display = "none";
+    set2("prod-livre-qtd",1);
+  }
+  if (id === "modal-entrada-insumo") {
+    populateSelect("entrada-insumo-id", insumos, "Selecionar insumo...");
+  }
   document.getElementById(id).classList.add("open");
 };
 
-window.closeModal = function (id) {
+window.closeModal = (id) => {
   document.getElementById(id).classList.remove("open");
-  if (id === "modal-produto") clearFormProduto();
-  if (id === "modal-venda")   clearFormVenda();
+  if (id === "modal-insumo")   clearInsumoForm();
+  if (id === "modal-produto")  clearProdutoForm();
+  if (id === "modal-receita")  { set2("receita-id",""); receitaMateriais=[]; renderMateriaisReceita(); }
+  if (id === "modal-pedido")   clearPedidoForm();
 };
 
-function populateProdutoSelect() {
-  const sel = document.getElementById("venda-prod-select");
-  sel.innerHTML = '<option value="">Selecionar produto...</option>';
-  produtos.forEach(p => {
+document.querySelectorAll(".modal-backdrop").forEach(bd => {
+  bd.addEventListener("click", e => { if (e.target===bd) closeModal(bd.id); });
+});
+
+// =============================================
+// SCREENS / HELPERS
+// =============================================
+function showScreen(id) {
+  ["login-screen","register-screen","denied-screen","app-screen"].forEach(s => {
+    document.getElementById(s).classList.toggle("active", s===id);
+  });
+}
+window.showRegister = () => showScreen("register-screen");
+window.showLogin    = () => showScreen("login-screen");
+
+function populateSelect(elId, items, placeholder) {
+  const sel = document.getElementById(elId);
+  if (!sel) return;
+  sel.innerHTML = `<option value="">${placeholder}</option>`;
+  items.forEach(i => {
     const opt = document.createElement("option");
-    opt.value       = p.id;
-    opt.textContent = `${p.nome} — R$ ${Number(p.preco||0).toFixed(2)}`;
+    opt.value = i.id;
+    opt.textContent = i.nome;
     sel.appendChild(opt);
   });
 }
 
-document.querySelectorAll(".modal-backdrop").forEach(bd => {
-  bd.addEventListener("click", e => { if (e.target === bd) closeModal(bd.id); });
-});
+function setSynced() { document.getElementById("sync-dot")?.classList.remove("loading"); }
 
-// =============================================
-// SCREENS
-// =============================================
-function showScreen(id) {
-  ["login-screen","register-screen","denied-screen","app-screen"].forEach(s => {
-    document.getElementById(s).classList.toggle("active", s === id);
-  });
-}
-
-window.showRegister = function () { showScreen("register-screen"); };
-window.showLogin    = function () { showScreen("login-screen"); };
-
-// =============================================
-// SYNC DOT
-// =============================================
-function setSynced() {
-  document.getElementById("sync-dot")?.classList.remove("loading");
-}
-
-// =============================================
-// TOAST
-// =============================================
 let toastTimeout;
-function showToast(msg, type = "") {
-  const toast = document.getElementById("toast");
-  toast.textContent = msg;
-  toast.className   = "toast show " + type;
+function showToast(msg, type="") {
+  const t = document.getElementById("toast");
+  t.textContent = msg; t.className = "toast show "+type;
   clearTimeout(toastTimeout);
-  toastTimeout = setTimeout(() => toast.classList.remove("show"), 3500);
+  toastTimeout = setTimeout(() => t.classList.remove("show"), 4000);
 }
 
 // =============================================
 // UTILS
 // =============================================
+function v(id)        { return document.getElementById(id)?.value || ""; }
+function set2(id, val) { const el = document.getElementById(id); if (el) el.value = val; }
+function set(id, val)  { const el = document.getElementById(id); if (el) el.textContent = val; }
+
 function tsToMs(ts) {
   if (!ts) return 0;
   if (ts.toDate) return ts.toDate().getTime();
   return new Date(ts).getTime();
 }
 
-function isoDate(d) {
-  return d.toISOString().split("T")[0];
+function isoDate(d) { return d.toISOString().split("T")[0]; }
+
+function fmt(n) {
+  const num = Number(n||0);
+  return num % 1 === 0 ? String(num) : num.toFixed(3).replace(/\.?0+$/, "");
 }
 
 function formatDate(val) {
@@ -984,9 +1146,5 @@ function formatDate(val) {
   else if (typeof val === "string") d = new Date(val + (val.includes("T") ? "" : "T12:00:00"));
   else                              d = new Date(val);
   if (isNaN(d)) return "—";
-  return d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" });
-}
-
-function formatMoney(val) {
-  return "R$ " + Number(val||0).toLocaleString("pt-BR", { minimumFractionDigits:2, maximumFractionDigits:2 });
+  return d.toLocaleDateString("pt-BR", { day:"2-digit", month:"2-digit", year:"numeric" });
 }
