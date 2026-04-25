@@ -3,16 +3,32 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Config (whitelist de e-mails) — qualquer logado lê, só admin escreve
-    // Na prática: qualquer logado pode ler para verificar whitelist
-    match /compartilhado/config {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null;
+    function isLogged() {
+      return request.auth != null;
     }
 
-    // Dados compartilhados (produtos, vendas, snapshots)
+    function getConfig() {
+      return get(/databases/$(database)/documents/compartilhado/config).data;
+    }
+
+    function isWhitelisted() {
+      return isLogged() &&
+        request.auth.token.email in getConfig().whitelist;
+    }
+
+    function isAdmin() {
+      return isWhitelisted() &&
+        getConfig().roles[request.auth.token.email] == "admin";
+    }
+
+    match /compartilhado/config {
+      allow read: if isWhitelisted();
+      allow write: if isAdmin();
+    }
+
     match /compartilhado/{document=**} {
-      allow read, write: if request.auth != null;
+      allow read: if isWhitelisted();
+      allow write: if isWhitelisted();
     }
   }
 }
