@@ -1,11 +1,35 @@
 rules_version = '2';
+
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /compartilhado/config {
-      allow read, write: if request.auth != null;
+
+    function isLogged() {
+      return request.auth != null;
     }
+
+    function getConfig() {
+      return get(/databases/$(database)/documents/compartilhado/config).data;
+    }
+
+    function isWhitelisted() {
+      return isLogged() &&
+        request.auth.token.email in getConfig().whitelist;
+    }
+
+    function isAdmin() {
+      return isWhitelisted() &&
+        getConfig().roles[request.auth.token.email] == "admin";
+    }
+
+    // 🔐 CONFIG (seguro + sem travar)
+    match /compartilhado/config {
+      allow read: if isLogged();      // necessário pra não quebrar o sistema
+      allow write: if isAdmin();      // só admin altera
+    }
+
+    // 🔓 DADOS GERAIS (estoque, pedidos, etc)
     match /compartilhado/{document=**} {
-      allow read, write: if request.auth != null;
+      allow read, write: if isWhitelisted(); 
     }
   }
 }
